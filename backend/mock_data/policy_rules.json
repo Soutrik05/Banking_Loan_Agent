@@ -1,0 +1,69 @@
+{
+  "loan_policy": {
+    "minimum_credit_score": 650,
+    "maximum_dti_ratio": 0.50,
+    "maximum_ltv_ratio": 0.80,
+    "minimum_loan_amount": 500000,
+    "maximum_loan_amount": 50000000,
+    "minimum_tenure_months": 12,
+    "maximum_tenure_months": 300,
+    "minimum_monthly_income": 25000,
+    "minimum_employment_months": 12
+  },
+
+  "interest_rate_bands": {
+    "excellent": {
+      "credit_score_min": 750,
+      "rate_pct": 8.50
+    },
+    "good": {
+      "credit_score_min": 700,
+      "rate_pct": 9.00
+    },
+    "fair": {
+      "credit_score_min": 650,
+      "rate_pct": 9.75
+    },
+    "poor": {
+      "credit_score_min": 600,
+      "rate_pct": 11.00
+    },
+    "very_poor": {
+      "credit_score_min": 0,
+      "rate_pct": null
+    }
+  },
+
+  "loan_outcomes": {
+    "approved": {
+      "condition": "credit_score >= 700 AND dti <= 0.40 AND property_score >= 70"
+    },
+    "partial_approval": {
+      "condition": "credit_score >= 650 AND dti <= 0.50 AND eligible_amount < requested_amount"
+    },
+    "conditional_approval": {
+      "condition": "credit_score >= 650 AND missing_documents OR co_owner_consent_required"
+    },
+    "inspection_required": {
+      "condition": "legal_disputes == true OR flood_zone == true OR is_simulated == true"
+    },
+    "rejected": {
+      "condition": "credit_score < 650 OR dti > 0.50 OR fraud_flag == true OR ownership_verified == false"
+    }
+  },
+
+  "fast_track_rules": {
+    "applies_to": "bank_inventory",
+    "skip_agents": ["risk_assessment_agent", "credit_assessment_agent"],
+    "minimum_credit_score": 650,
+    "maximum_dti_ratio": 0.50,
+    "note": "Fast track skips property verification entirely since bank already owns the property"
+  },
+
+  "document_requirements": {
+    "new_customer": ["aadhaar", "pan", "salary_slip", "bank_statement"],
+    "existing_customer": [],
+    "customer_owned_property": ["sale_deed", "property_tax_receipt", "encumbrance_certificate", "registry_document"],
+    "bank_inventory_property": []
+  }
+}

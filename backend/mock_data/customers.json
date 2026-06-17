@@ -1,0 +1,284 @@
+{
+  "users": {
+    "USR001": {
+      "password_hash": "ef92b778bafe771207d2f4da35e1d7f8e5f3b4b3c6e1d3e8f4c2a1b9d7e5f3a1",
+      "full_name": "Rajesh Kumar Das",
+      "email": "rajesh.das@email.com",
+      "phone": "+91-9830011223",
+      "role": "customer",
+      "is_active": true
+    },
+    "USR002": {
+      "password_hash": "b3a4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4",
+      "full_name": "Priya Sengupta",
+      "email": "priya.sengupta@email.com",
+      "phone": "+91-9831122334",
+      "role": "customer",
+      "is_active": true
+    },
+    "USR003": {
+      "password_hash": "c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5",
+      "full_name": "Sunita Ghosh",
+      "email": "sunita.ghosh@email.com",
+      "phone": "+91-9832233445",
+      "role": "customer",
+      "is_active": true
+    },
+    "USR004": {
+      "password_hash": "d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6",
+      "full_name": "Amir Sheikh",
+      "email": "amir.sheikh@email.com",
+      "phone": "+91-9833344556",
+      "role": "customer",
+      "is_active": true
+    },
+    "USR005": {
+      "password_hash": "e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7",
+      "full_name": "Blocked User",
+      "email": "blocked@email.com",
+      "phone": "+91-9000000000",
+      "role": "customer",
+      "is_active": false
+    }
+  },
+
+  "bank_customers": {
+    "USR001": {
+      "customer_id": "CUST001",
+      "user_id": "USR001",
+      "full_name": "Rajesh Kumar Das",
+      "email": "rajesh.das@email.com",
+      "phone": "+91-9830011223",
+      "date_of_birth": "1985-06-15",
+      "address": "22B, Ballygunge Place, Kolkata - 700019",
+      "pan_number": "ABCRD1234F",
+      "aadhaar_number": "XXXX-XXXX-1001",
+      "kyc_status": "verified",
+      "kyc_completed_date": "2021-04-10",
+      "account_numbers": ["SB-30011223", "FD-40011223"],
+      "account_open_date": "2021-04-15",
+      "monthly_income": 145000.0,
+      "employment_type": "salaried",
+      "employer_name": "Tata Consultancy Services",
+      "existing_loans": [
+        {
+          "loan_id": "PL-2022-0089",
+          "type": "personal_loan",
+          "outstanding_amount": 350000.0,
+          "emi": 8500.0,
+          "status": "active"
+        }
+      ],
+      "documents_on_file": ["aadhaar", "pan", "salary_slip", "bank_statement", "itr"],
+      "customer_segment": "premium",
+      "relationship_manager": "RM-003",
+      "risk_flag": false,
+      "fraud_flag": false,
+      "bounced_cheques_12m": 0,
+      "avg_monthly_balance": 280000.0
+    },
+    "USR002": {
+      "customer_id": "CUST002",
+      "user_id": "USR002",
+      "full_name": "Priya Sengupta",
+      "email": "priya.sengupta@email.com",
+      "phone": "+91-9831122334",
+      "date_of_birth": "1990-11-22",
+      "address": "14, Lake Town Block A, Kolkata - 700089",
+      "pan_number": "BFGPS5678K",
+      "aadhaar_number": "XXXX-XXXX-1002",
+      "kyc_status": "verified",
+      "kyc_completed_date": "2022-08-05",
+      "account_numbers": ["SB-31122334"],
+      "account_open_date": "2022-08-10",
+      "monthly_income": 95000.0,
+      "employment_type": "salaried",
+      "employer_name": "Wipro Limited",
+      "existing_loans": [],
+      "documents_on_file": ["aadhaar", "pan", "salary_slip", "bank_statement"],
+      "customer_segment": "standard",
+      "relationship_manager": "RM-007",
+      "risk_flag": false,
+      "fraud_flag": false,
+      "bounced_cheques_12m": 1,
+      "avg_monthly_balance": 120000.0
+    }
+  },
+
+  "kyc_documents": {
+    "aadhaar": {
+      "XXXX-XXXX-1001": {
+        "name": "Rajesh Kumar Das",
+        "dob": "1985-06-15",
+        "address": "22B, Ballygunge Place, Kolkata - 700019",
+        "gender": "M",
+        "verified": true
+      },
+      "XXXX-XXXX-1002": {
+        "name": "Priya Sengupta",
+        "dob": "1990-11-22",
+        "address": "14, Lake Town Block A, Kolkata - 700089",
+        "gender": "F",
+        "verified": true
+      },
+      "XXXX-XXXX-1003": {
+        "name": "Sunita Ghosh",
+        "dob": "1992-03-08",
+        "address": "Block AA-1, New Town, Kolkata - 700156",
+        "gender": "F",
+        "verified": true
+      },
+      "XXXX-XXXX-1004": {
+        "name": "Amir Sheikh",
+        "dob": "1988-07-19",
+        "address": "Dum Dum Park Block C, Kolkata - 700028",
+        "gender": "M",
+        "verified": true
+      }
+    },
+    "pan": {
+      "ABCRD1234F": {
+        "name": "Rajesh Kumar Das",
+        "dob": "1985-06-15",
+        "father_name": "Suresh Kumar Das",
+        "verified": true
+      },
+      "BFGPS5678K": {
+        "name": "Priya Sengupta",
+        "dob": "1990-11-22",
+        "father_name": "Biswajit Sengupta",
+        "verified": true
+      },
+      "DIPSG3456Q": {
+        "name": "Sunita Ghosh",
+        "dob": "1992-03-08",
+        "father_name": "Dipak Ghosh",
+        "verified": true
+      },
+      "CHQAS9012P": {
+        "name": "Amir Sheikh",
+        "dob": "1988-07-19",
+        "father_name": "Karim Sheikh",
+        "verified": true
+      }
+    },
+    "face_match_scores": {
+      "XXXX-XXXX-1001": 0.97,
+      "XXXX-XXXX-1002": 0.94,
+      "XXXX-XXXX-1003": 0.96,
+      "XXXX-XXXX-1004": 0.91
+    }
+  },
+
+  "financial_documents": {
+    "ABCRD1234F": {
+      "salary_slip": [
+        {"month": "2024-12", "gross_salary": 145000, "net_salary": 118000, "employer": "Tata Consultancy Services"},
+        {"month": "2024-11", "gross_salary": 145000, "net_salary": 118000, "employer": "Tata Consultancy Services"},
+        {"month": "2024-10", "gross_salary": 142000, "net_salary": 115500, "employer": "Tata Consultancy Services"}
+      ],
+      "bank_statement": {
+        "avg_monthly_balance": 280000,
+        "avg_monthly_credit": 120000,
+        "avg_monthly_debit": 78000,
+        "emi_obligations": 8500,
+        "months_analysed": 6
+      },
+      "itr": {
+        "assessment_year": "2024-25",
+        "gross_total_income": 1740000,
+        "tax_paid": 142000,
+        "itr_type": "ITR-1"
+      }
+    },
+    "BFGPS5678K": {
+      "salary_slip": [
+        {"month": "2024-12", "gross_salary": 95000, "net_salary": 77000, "employer": "Wipro Limited"},
+        {"month": "2024-11", "gross_salary": 95000, "net_salary": 77000, "employer": "Wipro Limited"},
+        {"month": "2024-10", "gross_salary": 93000, "net_salary": 75500, "employer": "Wipro Limited"}
+      ],
+      "bank_statement": {
+        "avg_monthly_balance": 120000,
+        "avg_monthly_credit": 78000,
+        "avg_monthly_debit": 55000,
+        "emi_obligations": 0,
+        "months_analysed": 6
+      },
+      "itr": {
+        "assessment_year": "2024-25",
+        "gross_total_income": 1140000,
+        "tax_paid": 78000,
+        "itr_type": "ITR-1"
+      }
+    },
+    "DIPSG3456Q": {
+      "salary_slip": [
+        {"month": "2024-12", "gross_salary": 82000, "net_salary": 66000, "employer": "Infosys BPM"},
+        {"month": "2024-11", "gross_salary": 82000, "net_salary": 66000, "employer": "Infosys BPM"},
+        {"month": "2024-10", "gross_salary": 80000, "net_salary": 64500, "employer": "Infosys BPM"}
+      ],
+      "bank_statement": {
+        "avg_monthly_balance": 95000,
+        "avg_monthly_credit": 67000,
+        "avg_monthly_debit": 48000,
+        "emi_obligations": 0,
+        "months_analysed": 6
+      },
+      "itr": null
+    },
+    "CHQAS9012P": {
+      "salary_slip": [
+        {"month": "2024-12", "gross_salary": 68000, "net_salary": 55000, "employer": "Cognizant"},
+        {"month": "2024-11", "gross_salary": 68000, "net_salary": 55000, "employer": "Cognizant"},
+        {"month": "2024-10", "gross_salary": 66000, "net_salary": 53500, "employer": "Cognizant"}
+      ],
+      "bank_statement": {
+        "avg_monthly_balance": 72000,
+        "avg_monthly_credit": 56000,
+        "avg_monthly_debit": 47000,
+        "emi_obligations": 4200,
+        "months_analysed": 6
+      },
+      "itr": null
+    }
+  },
+
+  "fraud_signals": {
+    "CUST001": {
+      "fraud_flag": false,
+      "fraud_confidence": 0.03,
+      "risk_signals": [],
+      "identity_verified": true,
+      "blacklist_match": false,
+      "synthetic_identity_score": 0.02,
+      "document_tampering_detected": false,
+      "previous_fraud_claims": 0,
+      "device_risk": "low",
+      "ip_risk": "low"
+    },
+    "CUST002": {
+      "fraud_flag": false,
+      "fraud_confidence": 0.08,
+      "risk_signals": ["multiple_login_locations"],
+      "identity_verified": true,
+      "blacklist_match": false,
+      "synthetic_identity_score": 0.05,
+      "document_tampering_detected": false,
+      "previous_fraud_claims": 0,
+      "device_risk": "low",
+      "ip_risk": "medium"
+    },
+    "FRAUD001": {
+      "fraud_flag": true,
+      "fraud_confidence": 0.93,
+      "risk_signals": ["blacklist_match", "document_tampering", "synthetic_identity"],
+      "identity_verified": false,
+      "blacklist_match": true,
+      "synthetic_identity_score": 0.88,
+      "document_tampering_detected": true,
+      "previous_fraud_claims": 2,
+      "device_risk": "high",
+      "ip_risk": "high"
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "credit_records": {
+    "ABCRD1234F": {
+      "cibil": {
+        "score": 792,
+        "credit_rank": "1",
+        "total_accounts": 4,
+        "active_accounts": 2,
+        "closed_accounts": 2,
+        "overdue_accounts": 0,
+        "default_history": false,
+        "days_past_due": 0,
+        "payment_history_months": 52,
+        "credit_utilisation_pct": 18.0,
+        "recent_enquiries_6m": 1,
+        "settled_accounts": 0,
+        "written_off_accounts": 0
+      },
+      "experian": {
+        "score": 778,
+        "risk_category": "Low Risk",
+        "delinquency_flag": false
+      },
+      "equifax": {
+        "score": 785,
+        "risk_band": "A",
+        "fraud_indicator": false
+      }
+    },
+    "BFGPS5678K": {
+      "cibil": {
+        "score": 724,
+        "credit_rank": "2",
+        "total_accounts": 2,
+        "active_accounts": 1,
+        "closed_accounts": 1,
+        "overdue_accounts": 0,
+        "default_history": false,
+        "days_past_due": 0,
+        "payment_history_months": 28,
+        "credit_utilisation_pct": 22.0,
+        "recent_enquiries_6m": 2,
+        "settled_accounts": 0,
+        "written_off_accounts": 0
+      },
+      "experian": {
+        "score": 711,
+        "risk_category": "Low Risk",
+        "delinquency_flag": false
+      },
+      "equifax": {
+        "score": 718,
+        "risk_band": "B",
+        "fraud_indicator": false
+      }
+    },
+    "DIPSG3456Q": {
+      "cibil": {
+        "score": 668,
+        "credit_rank": "3",
+        "total_accounts": 3,
+        "active_accounts": 2,
+        "closed_accounts": 1,
+        "overdue_accounts": 1,
+        "default_history": true,
+        "days_past_due": 28,
+        "payment_history_months": 18,
+        "credit_utilisation_pct": 61.0,
+        "recent_enquiries_6m": 4,
+        "settled_accounts": 1,
+        "written_off_accounts": 0
+      },
+      "experian": {
+        "score": 652,
+        "risk_category": "Moderate Risk",
+        "delinquency_flag": true
+      },
+      "equifax": {
+        "score": 659,
+        "risk_band": "C",
+        "fraud_indicator": false
+      }
+    },
+    "CHQAS9012P": {
+      "cibil": {
+        "score": 581,
+        "credit_rank": "4",
+        "total_accounts": 4,
+        "active_accounts": 3,
+        "closed_accounts": 1,
+        "overdue_accounts": 2,
+        "default_history": true,
+        "days_past_due": 75,
+        "payment_history_months": 14,
+        "credit_utilisation_pct": 84.0,
+        "recent_enquiries_6m": 7,
+        "settled_accounts": 1,
+        "written_off_accounts": 1
+      },
+      "experian": {
+        "score": 565,
+        "risk_category": "High Risk",
+        "delinquency_flag": true
+      },
+      "equifax": {
+        "score": 572,
+        "risk_band": "D",
+        "fraud_indicator": true
+      }
+    }
+  }
+}
