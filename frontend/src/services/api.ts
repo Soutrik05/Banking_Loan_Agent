@@ -5,7 +5,7 @@
  * ╚══════════════════════════════════════════════════════════╝
  */
 
-const BASE_URL = 'http://localhost:8000'; // 🔌 FastAPI backend (uvicorn)
+const BASE_URL = import.meta.env.VITE_API_URL; // 🔌 FastAPI backend (uvicorn)
 
 async function request<T>(
   method: string,
