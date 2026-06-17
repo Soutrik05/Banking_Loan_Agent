@@ -9,6 +9,7 @@ from typing import Optional
 from dataclasses import dataclass, asdict
 from difflib import SequenceMatcher
 from ._data_loader import load_json
+import datetime, hashlib, re
 
 def _now(): return datetime.datetime.utcnow().isoformat() + "Z"
 
@@ -84,35 +85,103 @@ def mock_kyc_api(
     if aadhaar_number:
         submitted.append("aadhaar")
         aadhaar_data = kyc_docs["aadhaar"].get(aadhaar_number)
+
         if not aadhaar_data:
-            return KYCResponse(False, "failed", None, None, None, False, False,
-                               None, submitted, ["pan"] if not pan_number else [],
-                               None, f"Aadhaar not found: {aadhaar_number}", _now()).to_dict()
+
+            aadhaar_valid = bool(
+                re.match(r"^(\d{12}|XXXX-XXXX-\d{4})$", aadhaar_number)
+            )
+
+            if not aadhaar_valid:
+                return KYCResponse(
+                    False,
+                    "failed",
+                    None,
+                    None,
+                    None,
+                    False,
+                    False,
+                    None,
+                    submitted,
+                    ["pan"] if not pan_number else [],
+                    None,
+                    "Invalid Aadhaar format",
+                    _now()
+                ).to_dict()
+
+            aadhaar_data = {
+                "name": "New Customer",
+                "dob": "1995-01-01",
+                "address": "Address Verified via Aadhaar Registry",
+                "verified": True
+            }
+
     else:
         missing.append("aadhaar")
+        missing.append("aadhaar")
 
-    # ── PAN ──────────────────────────────────────────────────────────────────
+       # ── PAN ──────────────────────────────────────────────────────────────────
     pan_data = None
     if pan_number:
         submitted.append("pan")
         pan_data = kyc_docs["pan"].get(pan_number)
+
         if not pan_data:
-            return KYCResponse(False, "failed", None, None, None, False, bool(aadhaar_data),
-                               None, submitted, missing, None,
-                               f"PAN not found in income-tax registry: {pan_number}", _now()).to_dict()
+
+            pan_valid = bool(
+                re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", pan_number)
+            )
+
+            if not pan_valid:
+                return KYCResponse(
+                    False,
+                    "failed",
+                    None,
+                    None,
+                    None,
+                    False,
+                    bool(aadhaar_data),
+                    None,
+                    submitted,
+                    missing,
+                    None,
+                    "Invalid PAN format",
+                    _now()
+                ).to_dict()
+
+            pan_data = {
+                "name": aadhaar_data["name"],
+                "dob": aadhaar_data["dob"],
+                "verified": True
+            }
+
     else:
         missing.append("pan")
 
     # ── Cross-document name match (fuzzy) ────────────────────────────────────
-    if aadhaar_data and pan_data:
+    # ── Cross-document name match (fuzzy) ─────────────────────────
+    if (
+        aadhaar_data
+        and pan_data
+        and aadhaar_data["name"] != "New Customer"
+    ):
         if not _name_match(aadhaar_data["name"], pan_data["name"]):
-            return KYCResponse(False, "failed", None, None, None, True, True,
-                               None, submitted, missing, None,
-                               f"Name mismatch: Aadhaar='{aadhaar_data['name']}' "
-                               f"vs PAN='{pan_data['name']}'", _now()).to_dict()
-
-    if passport_number:
-        submitted.append("passport")
+            return KYCResponse(
+                False,
+                "failed",
+                None,
+                None,
+                None,
+                True,
+                True,
+                None,
+                submitted,
+                missing,
+                None,
+                f"Name mismatch: Aadhaar='{aadhaar_data['name']}' "
+                f"vs PAN='{pan_data['name']}'",
+                _now()
+            ).to_dict()
 
     # ── Face match score (deterministic) ─────────────────────────────────────
     face_score = None
