@@ -33,7 +33,7 @@ app = FastAPI(title="National Bank Loan Assistant API")
 # Allow the React dev server to call this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000","https://banking-loan-agent.vercel.app",],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
