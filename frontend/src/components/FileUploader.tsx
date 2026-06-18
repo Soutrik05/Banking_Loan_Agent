@@ -6,30 +6,45 @@ interface FileUploaderProps {
   docType: string;
   token: string;
   onUploaded?: (url: string) => void;
+  /** Full backend response for this upload (extracted_fields, status, registration, ...). */
+  onResult?: (data: any) => void;
+  /** Allow selecting/dropping more than one file for this slot (e.g. 3 salary slips). */
+  multiple?: boolean;
 }
 
-export const FileUploader: React.FC<FileUploaderProps> = ({ label, docType, token, onUploaded }) => {
+export const FileUploader: React.FC<FileUploaderProps> = ({ label, docType, token, onUploaded, onResult, multiple }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
-  const [fileName, setFileName] = useState('');
+  const [fileNames, setFileNames] = useState<string[]>([]);
 
   const handleFile = async (file: File) => {
-    setFileName(file.name);
+    setFileNames(prev => (multiple ? [...prev, file.name] : [file.name]));
     setStatus('uploading');
     try {
-      const data: any = await uploadDocument(file, docType, token); // 🔌 BACKEND: POST /documents/upload
+      const data: any = await uploadDocument(file, docType, token); // 🔌 BACKEND: POST /kyc/upload
       setStatus('done');
       onUploaded?.(data.url);
+      onResult?.(data);
     } catch {
       setStatus('error');
     }
   };
 
+  const handleFiles = (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (!multiple) {
+      if (list[0]) handleFile(list[0]);
+      return;
+    }
+    list.forEach(handleFile);
+  };
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
   };
+
+  const fileName = fileNames[fileNames.length - 1] ?? '';
 
   return (
     <div
@@ -42,7 +57,13 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ label, docType, toke
         background: status === 'done' ? '#f0fdf4' : '#fafafa', transition: 'all .2s',
       }}
     >
-      <input ref={inputRef} type="file" hidden onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+      <input
+        ref={inputRef}
+        type="file"
+        hidden
+        multiple={multiple}
+        onChange={e => e.target.files?.length && handleFiles(e.target.files)}
+      />
       {status === 'idle' && (
         <>
           <svg style={{ margin:'0 auto 8px' }} width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="#9ca3af" strokeWidth={1.5}>
@@ -56,7 +77,9 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ label, docType, toke
       {status === 'done' && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#00b894" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-          <p style={{ fontSize: 13, color: '#00b894', fontWeight: 600 }}>{fileName} uploaded</p>
+          <p style={{ fontSize: 13, color: '#00b894', fontWeight: 600 }}>
+            {multiple && fileNames.length > 1 ? `${fileNames.length} files uploaded` : `${fileName} uploaded`}
+          </p>
         </div>
       )}
       {status === 'error' && <p style={{ fontSize: 13, color: '#ef4444' }}>Upload failed. Try again.</p>}

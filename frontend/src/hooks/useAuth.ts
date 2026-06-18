@@ -5,6 +5,7 @@ import {
   newUserRequestOTP,
   newUserVerifyOTP,
   checkSession,
+  verifyIdentity,
 } from '../services/api';
 
 /**
@@ -19,6 +20,7 @@ export type AuthStep =
   | 'new_phone'          // phone number
   | 'new_otp'            // OTP after phone
   | 'kyc'                // new user → proceed to KYC
+  | 'financial_docs'     // KYC identity verified → uploading income docs, chat visible
   | 'authenticated';     // fully logged in
 
 export interface AuthState {
@@ -32,6 +34,7 @@ export interface AuthState {
   // new user intermediate state
   tempId: string | null;
   phone: string | null;
+  documentsRequired: Array<{ doc_type: string; label: string; required: boolean }> | null;
 }
 
 const SESSION_KEY = 'bw_session';
@@ -67,6 +70,7 @@ export function useAuth(sessionId: string) {
     profile: null,
     tempId: null,
     phone: null,
+    documentsRequired: null,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -169,6 +173,47 @@ export function useAuth(sessionId: string) {
     }
   }, [sessionId, auth.tempId, auth.phone]);
 
+  /* ───────────── NEW USER: KYC + FINANCIAL DOCUMENTS ───────────── */
+
+  const kycVerifyIdentity = useCallback(async (aadhaarNumber: string, panNumber: string) => {
+    if (!auth.tempId || !auth.phone) return;
+    setLoading(true); setError(null);
+    try {
+      const res = await verifyIdentity(sessionId, auth.tempId, auth.phone, aadhaarNumber, panNumber);
+      setAuth(prev => ({
+        ...prev,
+        step: 'financial_docs',
+        documentsRequired: (res as unknown as { documents_required?: AuthState['documentsRequired'] }).documents_required ?? null,
+      }));
+      return res.message; // bot's next message — caller injects into chat
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Identity verification failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId, auth.tempId, auth.phone]);
+
+  const kycRegistrationComplete = useCallback((registration: {
+    jwt_token: string; user_id: string; full_name: string; customer_id: string;
+  }) => {
+    saveSession({
+      token: registration.jwt_token,
+      userId: registration.user_id,
+      fullName: registration.full_name,
+      customerId: registration.customer_id,
+    });
+    setAuth(prev => ({
+      ...prev,
+      step: 'authenticated',
+      token: registration.jwt_token,
+      userId: registration.user_id,
+      fullName: registration.full_name,
+      customerId: registration.customer_id,
+      isExisting: false,
+      documentsRequired: null,
+    }));
+  }, []);
+
   /* ───────────── LOGOUT ───────────── */
 
   const logout = useCallback(() => {
@@ -176,6 +221,7 @@ export function useAuth(sessionId: string) {
     setAuth({
       step: 'choose_type', token: null, userId: null, fullName: null,
       customerId: null, isExisting: null, profile: null, tempId: null, phone: null,
+      documentsRequired: null,
     });
   }, []);
 
@@ -188,6 +234,7 @@ export function useAuth(sessionId: string) {
     auth, loading, error, demoOtp, setStep,
     existingLoginStep1, existingLoginStep2,
     newUserStep1, newUserStep2,
+    kycVerifyIdentity, kycRegistrationComplete,
     logout,
   };
 }

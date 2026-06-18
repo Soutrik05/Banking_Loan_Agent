@@ -31,12 +31,17 @@ export function useChat(token: string | null, sessionId: string, onAuthRequired?
         role: 'assistant',
         content: typeof res?.reply === 'string' ? res.reply : "Sorry, I couldn't process that response.",
         timestamp: new Date(),
+        type: res?.type,
+        options: res?.options as any[],
+        properties: res?.properties as any[],
       };
       setMessages(prev => [...prev, botMsg]);
 
-      // 🔒 Orchestrator detected loan intent from a guest — pop the login screen.
+      // 🔒 Orchestrator detected loan intent from a guest — pop the login screen after a 2-second delay.
       if (res?.type === 'auth_required') {
-        onAuthRequired?.();
+        setTimeout(() => {
+          onAuthRequired?.();
+        }, 2000);
       }
     } catch (e) {
       const errMsg: Message = {
@@ -52,15 +57,20 @@ export function useChat(token: string | null, sessionId: string, onAuthRequired?
   }, [token, onAuthRequired]);
 
   /** Inject a bot message directly without a user turn — used after login/KYC steps */
-  const injectBotMessage = useCallback((content: string) => {
+  const injectBotMessage = useCallback((content: string, options?: any[]) => {
     const botMsg: Message = {
       id: Date.now().toString(),
       role: 'assistant',
       content,
       timestamp: new Date(),
+      options,
     };
     setMessages(prev => [...prev, botMsg]);
   }, []);
 
-  return { messages, isTyping, inputValue, setInputValue, sendMessage, injectBotMessage };
+  const resetChat = useCallback(() => {
+    setMessages([]);
+  }, []);
+
+  return { messages, isTyping, inputValue, setInputValue, sendMessage, injectBotMessage, resetChat };
 }

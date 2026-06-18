@@ -3,8 +3,12 @@ agents/kyc_agent.py
 =====================
 Runs ONLY for new customers (after OTP verification in auth_agent).
 
-Step 1 — Identity KYC: Aadhaar + PAN → mock_kyc_api → verify identity + pull
-         financial docs (salary slip, bank statement, ITR) in the same call.
+Step 1 — Identity KYC: Aadhaar + PAN → mock_kyc_api → verify identity.
+         (mock_kyc_api can also opportunistically return financial_data,
+         but the real financial_data used for registration now comes from
+         agents/financial_document_agent.py, which extracts it from the
+         salary slips / bank statements / ITR the customer uploads after
+         this step — see main.py's /kyc/upload.)
 Step 2 — Confirm & register: creates the bank_customers record in SQLite,
          issues JWT. This is the moment "new user" becomes a real customer.
 
@@ -16,7 +20,8 @@ import hashlib
 from database.init_db import get_connection
 from mock_api.mock_kyc_api import mock_kyc_api
 from services.jwt_service import create_token
-from session_store import mark_step, set_customer
+from session_store import mark_step, set_customer, set_credit
+from mock_api.mock_cibil_api import mock_cibil_api
 
 
 def verify_identity(
@@ -44,7 +49,7 @@ def verify_identity(
         documents_missing : list,
         financial_data    : dict | None,
         message           : str,
-        next_step         : "financial_review" | None
+        next_step         : "financial_documents" | None
     }
     """
     mark_step(session_id, "kyc", "active", set_active=True)
@@ -83,11 +88,8 @@ def verify_identity(
         "aadhaar_verified": result["aadhaar_verified"],
         "documents_missing": result["documents_missing"],
         "financial_data": result.get("financial_data"),
-        "message": (
-            f"All verified, {result['verified_name'].split()[0]}! "
-            f"I've also pulled your salary slips and bank statement on file."
-        ),
-        "next_step": "financial_review",
+        "message": f"All verified, {result['verified_name'].split()[0]}! KYC verification completed successfully.",
+        "next_step": "financial_documents",
     }
 
 
@@ -147,6 +149,13 @@ def complete_registration(
         mark_step(session_id, "kyc", "completed")
         mark_step(session_id, "account", "completed")
         set_customer(session_id, customer_id, verified_name, is_existing=False)
+
+        # Retrieve and set credit score
+        cibil = mock_cibil_api(pan_number)
+        if cibil["success"]:
+            score = cibil["cibil_score"]
+            rating = "Excellent" if score >= 750 else "Good" if score >= 700 else "Fair" if score >= 600 else "Poor"
+            set_credit(session_id, score, rating)
 
         return {
             "success": True,

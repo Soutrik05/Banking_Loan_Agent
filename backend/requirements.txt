@@ -9,3 +9,6 @@ langchain-community
 langchain-openai
 faiss-cpu
 numpy
+langgraph
+pdfplumber
+python-multipart

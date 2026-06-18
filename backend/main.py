@@ -10,7 +10,7 @@ Run with:
     uvicorn backend_api.main:app --reload --port 8000
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -24,9 +24,21 @@ from agents.auth_agent import (
 )
 from agents.account_discovery_agent import discover_account, get_property_question
 from agents.kyc_agent import verify_identity, complete_registration
+from agents.financial_document_agent import (
+    get_financial_document_request,
+    register_pending_applicant,
+    get_pending_applicant,
+    extract_financial_document,
+    record_upload,
+    get_upload_status,
+    build_financial_data_payload,
+    clear_applicant,
+)
 from agents.property_agent import submit_own_property, get_bank_inventory, select_bank_property
 from services.jwt_service import verify_token
-from session_store import get_session, mark_step, set_customer, reset_session
+from session_store import get_session, mark_step, set_customer, reset_session, set_credit
+from mock_api.mock_cibil_api import mock_cibil_api
+from database.init_db import get_connection
 
 app = FastAPI(title="National Bank Loan Assistant API")
 
@@ -149,6 +161,14 @@ def existing_otp_verify(req: OTPVerifyRequest):
     mark_step(req.session_id, "account", "completed")
     set_customer(req.session_id, result["customer_id"], result["full_name"], is_existing=True)
 
+    # Query and set credit score in session store
+    if discovery.get("pan_number"):
+        cibil = mock_cibil_api(discovery["pan_number"])
+        if cibil["success"]:
+            score = cibil["cibil_score"]
+            rating = "Excellent" if score >= 750 else "Good" if score >= 700 else "Fair" if score >= 600 else "Poor"
+            set_credit(req.session_id, score, rating)
+
     return {
         **result,
         "profile": discovery,
@@ -206,17 +226,25 @@ def check_session(token: str):
 @app.post("/chat")
 def chat(req: ChatRequest):
     """
-    Routes every chat message through orchestrator_agent.handle_message().
-    Login is enforced on the frontend, so token should always be present
-    once the user reaches this screen.
+    Routes every chat message through graph.chat_graph.run_chat_graph(),
+    which keeps real conversation memory per session_id and uses an LLM
+    router instead of brittle keyword matching. orchestrator_agent's
+    classify_intent() is still used inside the graph for guest-intent
+    classification.
+
+    Login is enforced on the frontend, so token will be present once an
+    existing customer reaches this screen. A brand-new customer who has
+    completed KYC identity verification but not yet finished uploading
+    financial documents won't have a token yet either -- the graph itself
+    figures that out from session_id via session_store.
     """
-    from agents.orchestrator_agent import handle_message
+    from graph.chat_graph import run_chat_graph
 
     user_context = None
     if req.token:
         user_context = _get_user_from_token(req.token)
 
-    response = handle_message(
+    response = run_chat_graph(
         message=req.message,
         session_id=req.session_id,
         user_context=user_context,
@@ -240,7 +268,92 @@ def kyc_verify_identity(req: VerifyIdentityRequest):
     )
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
-    return result
+
+    # Identity is verified but the account isn't created yet -- stash what
+    # we'll need to finish registration once the financial documents are
+    # uploaded, and hand back the document checklist so the frontend can
+    # show it straight away.
+    register_pending_applicant(
+        session_id=req.session_id,
+        temp_id=result["temp_id"],
+        phone=result["phone"],
+        aadhaar_number=result["aadhaar_number"],
+        pan_number=result["pan_number"],
+        verified_name=result["verified_name"],
+        verified_dob=result["verified_dob"],
+        verified_address=result["verified_address"],
+    )
+    doc_request = get_financial_document_request()
+
+    return {
+        **result,
+        "message": f"{result['message']} {doc_request['message']}",
+        "documents_required": doc_request["documents_required"],
+    }
+
+
+@app.post("/kyc/upload")
+async def kyc_upload_document(
+    file: UploadFile = File(...),
+    doc_type: str = Form(...),
+    temp_id: str = Form(...),
+):
+    """
+    Uploads ONE financial document (salary slip / bank statement / ITR),
+    extracts structured fields from it with pdfplumber, and records it
+    against this applicant. Once every required document type has at
+    least one upload, registration is completed automatically and a JWT
+    is issued in the same response -- no separate confirmation step.
+    """
+    applicant = get_pending_applicant(temp_id)
+    if not applicant:
+        raise HTTPException(status_code=400, detail="No pending KYC session found for this temp_id. Please complete identity verification first.")
+
+    file_bytes = await file.read()
+    extraction = extract_financial_document(file_bytes, file.filename, doc_type)
+    if not extraction["success"]:
+        return {
+        "success": False,
+        "message": extraction["message"],
+        "doc_type": doc_type,
+        "status": get_upload_status(temp_id),
+        "registration": None,
+        "url": None,
+    }
+
+    status = record_upload(temp_id, doc_type, extraction["extracted_fields"], file.filename)
+
+    registration = None
+    if status["ready"]:
+        financial_data = build_financial_data_payload(temp_id)
+        reg_result = complete_registration(
+            session_id=applicant["session_id"],
+            temp_id=applicant["temp_id"],
+            phone=applicant["phone"],
+            aadhaar_number=applicant["aadhaar_number"],
+            pan_number=applicant["pan_number"],
+            verified_name=applicant["verified_name"],
+            verified_dob=applicant["verified_dob"],
+            verified_address=applicant["verified_address"],
+            financial_data=financial_data,
+        )
+        if reg_result["success"]:
+            registration = reg_result
+            clear_applicant(temp_id)  # after capturing `status` above -- nothing below reads the store again
+        else:
+            registration = reg_result  # surfaces the failure message; applicant stays pending so they can retry
+
+    return {
+        "success": True,
+        "message": extraction["message"],
+        "doc_type": doc_type,
+        "filename": file.filename,
+        "extracted_fields": extraction["extracted_fields"],
+        "fields_found": extraction["fields_found"],
+        "status": status,
+        "registration": registration,
+        "url": f"uploaded://{file.filename}",
+    }
 
 
 @app.post("/kyc/complete-registration")
@@ -254,10 +367,11 @@ def kyc_complete_registration(req: CompleteRegistrationRequest):
         verified_name=req.verified_name,
         verified_dob=req.verified_dob,
         verified_address=req.verified_address,
-        financial_data=req.financial_data,
+        financial_data=req.financial_data or build_financial_data_payload(req.temp_id),
     )
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
+    clear_applicant(req.temp_id)
     return result
 
 
@@ -303,7 +417,25 @@ def session_status(session_id: str):
     Polled by the frontend to render the real workflow panel.
     Replaces the hardcoded appState.ts workflowSteps + creditScore.
     """
-    return get_session(session_id)
+    session = get_session(session_id)
+    # If credit score is not yet set, but we have customer_id, try to fetch and set it
+    if session.get("customer_id") and session.get("credit_score") is None:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT pan_number FROM bank_customers WHERE customer_id = ?", (session["customer_id"],))
+            row = cursor.fetchone()
+            if row and row["pan_number"]:
+                cibil = mock_cibil_api(row["pan_number"])
+                if cibil["success"]:
+                    score = cibil["cibil_score"]
+                    rating = "Excellent" if score >= 750 else "Good" if score >= 700 else "Fair" if score >= 600 else "Poor"
+                    set_credit(session_id, score, rating)
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    return session
 
 
 @app.post("/session/reset")

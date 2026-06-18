@@ -66,7 +66,24 @@ def classify_intent(user_message: str) -> str:
         return "faq"
 
 
+def is_unsupported_loan(message: str) -> bool:
+    lower = message.lower()
+    unsupported = [
+        "car loan", "personal loan", "gold loan", "business loan",
+        "education loan", "student loan", "auto loan", "vehicle loan",
+        "bike loan", "two wheeler loan", "two-wheeler loan", "motorcycle loan",
+        "credit card"
+    ]
+    return any(term in lower for term in unsupported)
+
+
 def handle_message(message: str, session_id: str, user_context: dict, chat_history: list = None) -> dict:
+    if is_unsupported_loan(message):
+        return {
+            "reply": "Hi there! 👋 I'm Arjun, your dedicated relationship manager. Please note that BankWise AI currently only supports Home Loans and Loans Against Property (LAP). We don't support other loan products (like car, personal, or education loans) at this time, but I'd be glad to assist you with your home loan needs!",
+            "type": "text",
+        }
+
     """
     Main entry point called by POST /chat.
 
@@ -110,11 +127,7 @@ def handle_message(message: str, session_id: str, user_context: dict, chat_histo
 
         if intent == "loan_application":
             return {
-                "reply": (
-                    "I'd love to help you get that started! To move forward with a loan "
-                    "application I'll just need you to sign in or create an account first — "
-                    "it only takes a minute."
-                ),
+                "reply": "I am happy to continue with your application, please login.",
                 "type": "auth_required",
             }
         # Otherwise fall through to the FAQ agent below — guests can browse freely.

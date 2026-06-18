@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { verifyIdentity } from '../services/api';
 import type { AuthStep } from '../hooks/useAuth';
 
 
@@ -9,15 +8,12 @@ interface LoginPageProps {
   error: string | null;
   demoOtp: string | null;
 
-  sessionId: string;
-  tempId: string | null;
-  phone: string | null;
-
   setStep: (step: AuthStep) => void;
   existingLoginStep1: (userId: string, password: string) => Promise<void>;
   existingLoginStep2: (otp: string) => Promise<void>;
   newUserStep1: (phone: string) => Promise<void>;
   newUserStep2: (otp: string) => Promise<void>;
+  kycVerifyIdentity: (aadhaarNumber: string, panNumber: string) => Promise<void>;
   onClose?: () => void;
 }
 
@@ -43,15 +39,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   error,
   demoOtp,
 
-  sessionId,
-  tempId,
-  phone: authPhone,
-
   setStep,
   existingLoginStep1,
   existingLoginStep2,
   newUserStep1,
   newUserStep2,
+  kycVerifyIdentity,
   onClose,
 }) => {
   const [userId, setUserId] = useState('');
@@ -302,17 +295,7 @@ if (step === 'kyc') {
             }
 
             try {
-           const res = await verifyIdentity(
-  sessionId,
-  tempId || '',
-  authPhone || '',
-  aadhaar,
-  pan
-);
-              console.log('KYC Response:', res);
-
-              alert(res.message);
-
+              await kycVerifyIdentity(aadhaar, pan);
             } catch (err) {
               console.error(err);
               setKycError('KYC Verification Failed');

@@ -24,6 +24,9 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  type?: string;
+  options?: any[];
+  properties?: any[];
 }
 
 export interface ApplicationHistoryItem {
@@ -48,6 +51,7 @@ export type AuthStep =
   | 'new_phone'
   | 'new_otp'
   | 'kyc'
+  | 'financial_docs'
   | 'authenticated';
 
 export interface CustomerProfile {
@@ -98,6 +102,14 @@ export interface BankProperty {
   listed_price: number;
   max_loan_available: number;
   property_score: number;
+  nearby_schools?: string[];
+  hospitals?: string[];
+  transit?: {
+    metro: string;
+    bus: string;
+    train: string;
+  };
+  crime_rate?: string;
 }
 
 export interface OwnPropertySubmission {

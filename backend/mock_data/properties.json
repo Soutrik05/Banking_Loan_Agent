@@ -24,7 +24,15 @@
       "legal_status": "clear",
       "latitude": 22.5726,
       "longitude": 88.4142,
-      "images_available": true
+      "images_available": true,
+      "nearby_schools": ["Salt Lake School (1.2 km)", "NUJS (1.8 km)", "DPS Newtown (3.0 km)"],
+      "hospitals": ["AMRI Hospital (1.5 km)", "Apollo Gleneagles (2.1 km)", "Columbia Asia (2.8 km)"],
+      "transit": {
+        "metro": "Green Line (Sector V Station - 0.4 km)",
+        "bus": "Sector V Bus Terminus (0.3 km)",
+        "train": "Bidhan Nagar Road Station (4.5 km)"
+      },
+      "crime_rate": "Low (Very Safe commercial/residential zone)"
     },
     "BINV002": {
       "address": "Block AA-2, Flat 5A, Hiland Park, New Town Action Area II, Kolkata - 700156",
@@ -50,7 +58,15 @@
       "legal_status": "clear",
       "latitude": 22.5958,
       "longitude": 88.4785,
-      "images_available": true
+      "images_available": true,
+      "nearby_schools": ["Delhi Public School Newtown (0.5 km)", "The Newtown School (1.0 km)", "IIT Kharagpur Rajarhat Campus (1.5 km)"],
+      "hospitals": ["Tata Medical Center (0.8 km)", "Ohio Cardiology Hospital (1.2 km)", "Bhagirathi Neotia Woman & Child Care (1.5 km)"],
+      "transit": {
+        "metro": "Orange Line (New Town Station - 0.6 km)",
+        "bus": "Action Area II Bus Stop (0.2 km)",
+        "train": "Sodpur Railway Station (12.0 km)"
+      },
+      "crime_rate": "Very Low (Highly secure gated community area)"
     },
     "BINV003": {
       "address": "Flat 3C, Srijan Corporate Park, EM Bypass, Kolkata - 700107",
@@ -76,7 +92,15 @@
       "legal_status": "clear",
       "latitude": 22.5204,
       "longitude": 88.3982,
-      "images_available": true
+      "images_available": true,
+      "nearby_schools": ["Heritage School (2.5 km)", "Garden High School (3.0 km)", "Calcutta International School (2.0 km)"],
+      "hospitals": ["Ruby General Hospital (0.5 km)", "Fortis Hospital (1.2 km)", "Desun Hospital (1.0 km)"],
+      "transit": {
+        "metro": "Orange Line (Ruby/Hemanta Mukherjee Station - 0.4 km)",
+        "bus": "Ruby Crossing Bus Stop (0.3 km)",
+        "train": "Ballygunge Junction (3.5 km)"
+      },
+      "crime_rate": "Moderate (Active urban corridor)"
     },
     "BINV004": {
       "address": "Plot 12, Rajarhat Township, Rajarhat, Kolkata - 700135",
@@ -102,7 +126,15 @@
       "legal_status": "clear",
       "latitude": 22.6204,
       "longitude": 88.4821,
-      "images_available": false
+      "images_available": false,
+      "nearby_schools": ["DPS Megacity (2.0 km)", "Bodhisattva School (1.5 km)", "National English School (3.2 km)"],
+      "hospitals": ["Charnock Hospital (2.5 km)", "Rekjoani Hospital (1.0 km)", "VIP Apex Hospital (3.0 km)"],
+      "transit": {
+        "metro": "Orange Line (Rajarhat Station - 0.8 km)",
+        "bus": "Rajarhat Chowmatha Bus Stop (0.3 km)",
+        "train": "Dum Dum Junction (8.5 km)"
+      },
+      "crime_rate": "Low (Developing suburban residential layout)"
     },
     "BINV005": {
       "address": "Flat 2A, Gems Apartment, Tollygunge, Kolkata - 700033",
@@ -128,7 +160,15 @@
       "legal_status": "clear",
       "latitude": 22.4944,
       "longitude": 88.3392,
-      "images_available": true
+      "images_available": true,
+      "nearby_schools": ["Assembly of God Church School (1.0 km)", "G.D. Birla Sabhagar School (1.5 km)", "South Point High School (3.0 km)"],
+      "hospitals": ["M.R. Bangur Hospital (0.8 km)", "RSVP Hospital (0.5 km)", "Tollygunge ESI Hospital (1.2 km)"],
+      "transit": {
+        "metro": "Blue Line (Mahanayak Uttam Kumar Station - 0.3 km)",
+        "bus": "Tollygunge Tram Depot (0.4 km)",
+        "train": "Tollygunge Railway Station (0.5 km)"
+      },
+      "crime_rate": "Low (Established and quiet neighborhood)"
     }
   }
 }

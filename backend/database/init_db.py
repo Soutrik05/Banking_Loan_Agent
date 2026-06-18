@@ -66,6 +66,7 @@ def create_tables(conn):
             fraud_flag          INTEGER DEFAULT 0,
             bounced_cheques_12m INTEGER DEFAULT 0,
             avg_monthly_balance REAL,
+            account_numbers     TEXT,
             created_at          TEXT DEFAULT (datetime('now'))
         )
     """)
@@ -154,8 +155,8 @@ def migrate_from_json(conn):
                      kyc_status, kyc_completed_date, monthly_income,
                      employment_type, employer_name, customer_segment,
                      relationship_manager, risk_flag, fraud_flag,
-                     bounced_cheques_12m, avg_monthly_balance)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     bounced_cheques_12m, avg_monthly_balance, account_numbers)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 bc["customer_id"], user_id, bc["full_name"],
                 bc["email"], bc["phone"], bc["date_of_birth"],
@@ -167,6 +168,7 @@ def migrate_from_json(conn):
                 1 if bc["risk_flag"] else 0,
                 1 if bc["fraud_flag"] else 0,
                 bc["bounced_cheques_12m"], bc["avg_monthly_balance"],
+                json.dumps(bc.get("account_numbers", [])),
             ))
 
             # Insert existing loans

@@ -10,6 +10,7 @@ Decides what to ask next — property question.
 New users never reach this agent — they go to kyc_agent after OTP.
 """
 
+import json
 from database.init_db import get_connection
 
 
@@ -44,6 +45,7 @@ def discover_account(user_id: str, customer_id: str) -> dict:
         risk_flag        : bool,
         fraud_flag       : bool,
         documents_on_file: list,
+        account_numbers  : list,
         message          : str,
         next_step        : "property_question"
     }
@@ -82,6 +84,14 @@ def discover_account(user_id: str, customer_id: str) -> dict:
         if bc["kyc_status"] == "verified":
             docs_on_file = ["aadhaar", "pan", "salary_slip", "bank_statement"]
 
+        # Parse account_numbers
+        account_numbers = []
+        if bc["account_numbers"]:
+            try:
+                account_numbers = json.loads(bc["account_numbers"])
+            except Exception:
+                pass
+
         return {
             "success": True,
             "is_existing": True,
@@ -104,6 +114,7 @@ def discover_account(user_id: str, customer_id: str) -> dict:
             "risk_flag": bool(bc["risk_flag"]),
             "fraud_flag": bool(bc["fraud_flag"]),
             "documents_on_file": docs_on_file,
+            "account_numbers": account_numbers,
             "message": (
                 f"Welcome back, {bc['full_name']}! "
                 f"We have your records on file. "

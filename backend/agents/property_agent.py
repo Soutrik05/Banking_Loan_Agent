@@ -113,6 +113,10 @@ def get_bank_inventory(city: str = None, max_price: int = None) -> dict:
             "area_sqft": rec["area_sqft"], "bedrooms": rec["bedrooms"],
             "listed_price": rec["listed_price"], "down_payment_min": rec["down_payment_min"],
             "max_loan_available": rec["max_loan_available"], "property_score": rec["property_score"],
+            "nearby_schools": rec.get("nearby_schools"),
+            "hospitals": rec.get("hospitals"),
+            "transit": rec.get("transit"),
+            "crime_rate": rec.get("crime_rate"),
         })
     return {"success": True, "properties": results, "count": len(results)}
 
