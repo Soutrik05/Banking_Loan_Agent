@@ -65,9 +65,14 @@ export default function App() {
         existingLoginStep2={handleExistingStep2}
         newUserStep1={newUserStep1}
         newUserStep2={handleNewUserStep2}
+
+        sessionId={SESSION_ID}
+        tempId={auth.tempId}
+        phone={auth.phone}
+
         onClose={() => setShowAuthGate(false)}
       />
-    );
+          );
   }
 
   return (

@@ -107,6 +107,33 @@ export const sendChatMessage = (message: string, sessionId: string, token?: stri
 export const getRates = () => request('GET', '/rates');
 
 /* ─── KYC (to be built next) ─── */
+ 
+ export const verifyIdentity = (
+  sessionId: string,
+  tempId: string,
+  phone: string,
+  aadhaarNumber: string,
+  panNumber: string
+) =>
+  request<{
+    success: boolean;
+    verified_name: string;
+    verified_dob: string;
+    verified_address: string;
+    financial_data: Record<string, unknown>;
+    message: string;
+    next_step: string;
+  }>(
+    'POST',
+    '/kyc/verify-identity',
+    {
+      session_id: sessionId,
+      temp_id: tempId,
+      phone,
+      aadhaar_number: aadhaarNumber,
+      pan_number: panNumber
+    }
+  );
 
 export const uploadDocument = async (file: File, docType: string, tempId: string) => {
   const fd = new FormData();

@@ -1,17 +1,24 @@
 import React, { useState } from 'react';
+import { verifyIdentity } from '../services/api';
 import type { AuthStep } from '../hooks/useAuth';
+
 
 interface LoginPageProps {
   step: AuthStep;
   loading: boolean;
   error: string | null;
   demoOtp: string | null;
+
+  sessionId: string;
+  tempId: string | null;
+  phone: string | null;
+
   setStep: (step: AuthStep) => void;
   existingLoginStep1: (userId: string, password: string) => Promise<void>;
   existingLoginStep2: (otp: string) => Promise<void>;
   newUserStep1: (phone: string) => Promise<void>;
   newUserStep2: (otp: string) => Promise<void>;
-  onClose?: () => void; // lets a guest dismiss the login screen and keep browsing
+  onClose?: () => void;
 }
 
 const card: React.CSSProperties = {
@@ -31,14 +38,29 @@ const primaryBtn: React.CSSProperties = {
 };
 
 export const LoginPage: React.FC<LoginPageProps> = ({
-  step, loading, error, demoOtp, setStep,
-  existingLoginStep1, existingLoginStep2,
-  newUserStep1, newUserStep2, onClose,
+  step,
+  loading,
+  error,
+  demoOtp,
+
+  sessionId,
+  tempId,
+  phone: authPhone,
+
+  setStep,
+  existingLoginStep1,
+  existingLoginStep2,
+  newUserStep1,
+  newUserStep2,
+  onClose,
 }) => {
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
+  const [pan, setPan] = useState('');
+  const [aadhaar, setAadhaar] = useState('');
+  const [kycError, setKycError] = useState('');
 
   const Header = ({ title, subtitle }: { title: string; subtitle: string }) => (
     <div style={{ textAlign: 'center', marginBottom: 32 }}>
@@ -199,6 +221,110 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       </div>
     );
   }
+ /* ── STEP: kyc ── */
+if (step === 'kyc') {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#f8f9fb'
+      }}
+    >
+      <div style={card}>
+        <Header
+          title="KYC Verification"
+          subtitle="Identity verification required"
+        />
 
-  return null;
-};
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>PAN Number</label>
+          <input
+            style={{
+              ...input,
+              border:
+                kycError && !pan.trim()
+                  ? '1px solid red'
+                  : '1px solid #e5e7eb'
+            }}
+            placeholder="ABCDE1234F"
+            value={pan}
+            onChange={(e) => {
+              setPan(e.target.value);
+              setKycError('');
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>Aadhaar Number</label>
+          <input
+            style={{
+              ...input,
+              border:
+                kycError && !aadhaar.trim()
+                  ? '1px solid red'
+                  : '1px solid #e5e7eb'
+            }}
+            placeholder="123456789012"
+            value={aadhaar}
+            onChange={(e) => {
+              setAadhaar(e.target.value);
+              setKycError('');
+            }}
+          />
+        </div>
+
+        {kycError && (
+          <p
+            style={{
+              color: 'red',
+              fontSize: '12px',
+              marginBottom: '12px'
+            }}
+          >
+            {kycError}
+          </p>
+        )}
+
+        <button
+          style={{
+            ...primaryBtn,
+            opacity: loading ? 0.7 : 1
+          }}
+          disabled={loading}
+          onClick={async () => {
+            if (!pan.trim() || !aadhaar.trim()) {
+              setKycError('* Empty fields');
+              return;
+            }
+
+            try {
+           const res = await verifyIdentity(
+  sessionId,
+  tempId || '',
+  authPhone || '',
+  aadhaar,
+  pan
+);
+              console.log('KYC Response:', res);
+
+              alert(res.message);
+
+            } catch (err) {
+              console.error(err);
+              setKycError('KYC Verification Failed');
+            }
+          }}
+        >
+          Continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+    return null;
+  };
