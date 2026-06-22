@@ -141,7 +141,14 @@ def _classify_guest_intent(message: str) -> str:
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a banking routing classifier. Classify the user message into either 'faq' (general questions, greetings, small talk) or 'loan_application' (user wants to apply, proceed, or get a loan). Respond with ONLY the word 'faq' or 'loan_application' and nothing else."
+                    "content": (
+                        "You are a banking routing classifier. Classify the user message into either:\n"
+                        "- 'faq': General informational questions (e.g., eligibility criteria, interest rates, "
+                        "required documents, FAQs, calculation requests, greetings, small talk).\n"
+                        "- 'loan_application': Explicit requests to start, apply, proceed, or initiate a new loan application "
+                        "process (e.g., 'start application', 'apply now', 'apply for a loan', 'I want to apply').\n"
+                        "Respond with ONLY the word 'faq' or 'loan_application' and nothing else."
+                    )
                 },
                 {"role": "user", "content": message},
             ],
@@ -616,13 +623,28 @@ _compiled = _graph.compile(checkpointer=MemorySaver())
 
 def is_unsupported_loan(message: str) -> bool:
     lower = message.lower()
-    unsupported = [
+    
+    # 1. Check exact phrase matches first
+    phrases = [
         "car loan", "personal loan", "gold loan", "business loan",
         "education loan", "student loan", "auto loan", "vehicle loan",
         "bike loan", "two wheeler loan", "two-wheeler loan", "motorcycle loan",
         "credit card"
     ]
-    return any(term in lower for term in unsupported)
+    if any(phrase in lower for phrase in phrases):
+        return True
+        
+    # 2. Check standalone keywords with word boundaries to avoid false substring matches (e.g. matching "card" as "car")
+    unsupported_words = [
+        "car", "cars", "bike", "bikes", "motorcycle", "motorcycles",
+        "auto", "vehicle", "vehicles", "gold", "education", "student",
+        "students", "study", "personal", "business"
+    ]
+    for word in unsupported_words:
+        if re.search(r'\b' + re.escape(word) + r'\b', lower):
+            return True
+            
+    return False
 
 
 def run_chat_graph(message: str, session_id: str, user_context: Optional[dict]) -> dict:

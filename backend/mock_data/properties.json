@@ -131,7 +131,7 @@
       "hospitals": ["Charnock Hospital (2.5 km)", "Rekjoani Hospital (1.0 km)", "VIP Apex Hospital (3.0 km)"],
       "transit": {
         "metro": "Orange Line (Rajarhat Station - 0.8 km)",
-        "bus": "Rajarhat Chowmatha Bus Stop (0.3 km)",
+        "bus": "Rajarhat text stop (0.3 km)",
         "train": "Dum Dum Junction (8.5 km)"
       },
       "crime_rate": "Low (Developing suburban residential layout)"

@@ -66,15 +66,32 @@ def classify_intent(user_message: str) -> str:
         return "faq"
 
 
+import re
+
 def is_unsupported_loan(message: str) -> bool:
     lower = message.lower()
-    unsupported = [
+    
+    # 1. Check exact phrase matches first
+    phrases = [
         "car loan", "personal loan", "gold loan", "business loan",
         "education loan", "student loan", "auto loan", "vehicle loan",
         "bike loan", "two wheeler loan", "two-wheeler loan", "motorcycle loan",
         "credit card"
     ]
-    return any(term in lower for term in unsupported)
+    if any(phrase in lower for phrase in phrases):
+        return True
+        
+    # 2. Check standalone keywords with word boundaries to avoid false substring matches (e.g. matching "card" as "car")
+    unsupported_words = [
+        "car", "cars", "bike", "bikes", "motorcycle", "motorcycles",
+        "auto", "vehicle", "vehicles", "gold", "education", "student",
+        "students", "study", "personal", "business"
+    ]
+    for word in unsupported_words:
+        if re.search(r'\b' + re.escape(word) + r'\b', lower):
+            return True
+            
+    return False
 
 
 def handle_message(message: str, session_id: str, user_context: dict, chat_history: list = None) -> dict:

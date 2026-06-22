@@ -102,6 +102,32 @@
       "fraud_flag": false,
       "bounced_cheques_12m": 1,
       "avg_monthly_balance": 120000.0
+    },
+    "USR003": {
+      "customer_id": "CUST003",
+      "user_id": "USR003",
+      "full_name": "Sunita Ghosh",
+      "email": "sunita.ghosh@email.com",
+      "phone": "+91-9832233445",
+      "date_of_birth": "1992-03-08",
+      "address": "Block AA-1, New Town, Kolkata - 700156",
+      "pan_number": "DIPSG3456Q",
+      "aadhaar_number": "XXXX-XXXX-1003",
+      "kyc_status": "verified",
+      "kyc_completed_date": "2023-01-15",
+      "account_numbers": ["SB-30022334", "FD-40022334"],
+      "account_open_date": "2023-01-20",
+      "monthly_income": 82000.0,
+      "employment_type": "salaried",
+      "employer_name": "Infosys BPM",
+      "existing_loans": [],
+      "documents_on_file": ["aadhaar", "pan", "salary_slip", "bank_statement"],
+      "customer_segment": "standard",
+      "relationship_manager": "RM-005",
+      "risk_flag": false,
+      "fraud_flag": false,
+      "bounced_cheques_12m": 0,
+      "avg_monthly_balance": 95000.0
     }
   },
 
