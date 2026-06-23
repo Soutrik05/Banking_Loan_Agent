@@ -64,6 +64,7 @@ from agents.financial_document_agent import (
     get_upload_status,
     is_awaiting_documents,
 )
+from session_store import get_session
 from prompts.router_prompt import ROUTER_SYSTEM_PROMPT, PROPERTY_QA_SYSTEM_PROMPT
 from utils.config import (
     AZURE_OPENAI_API_KEY,
@@ -89,7 +90,7 @@ class ChatState(TypedDict, total=False):
     user_context: Optional[dict]
     customer_profile: Optional[dict]
     chat_history: Annotated[list, operator.add]
-    stage: Literal["new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow", "inventory_flow", "general"]
+    stage: Literal["new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow", "inventory_flow", "own_choice", "general"]
     shown_properties: list
     selected_property_id: Optional[str]
     just_handled: bool  # set by authed_entry/kyc every turn; True only when the node produced the terminal reply itself
@@ -100,6 +101,9 @@ class ChatState(TypedDict, total=False):
     # `stage` needs to still read as "new" at that point so authed_entry's
     # first-touch welcome fires correctly.
     onboarding_stage: Literal["awaiting_documents"]
+
+    # State preservation
+    current_agent: Optional[str]
 
     # Output fields — every terminal node sets ALL of these explicitly
     # (via _output() below) so a stale value from a previous turn never
@@ -127,6 +131,110 @@ def _output(message, reply, response_type, *, options=None, properties=None,
         ],
         **extra,
     }
+
+
+# Constants for prompts and options
+WELCOME_CHOICE_OPTIONS = [
+    {"id": "lap", "label": "I own a property"},
+    {"id": "home_loan", "label": "I want to buy a property"},
+]
+
+TIE_UP_OPTIONS = [
+    {"id": "tie_ups", "label": "Our Tie-ups"},
+    {"id": "own_choice", "label": "My Own Choice"},
+]
+
+EXPLAIN_CHOICE_OPTIONS = [
+    {"id": "lap", "label": "I own a property (LAP)"},
+    {"id": "home_loan", "label": "I want to buy a new property"},
+]
+
+LAP_FLOW_PROMPT = (
+    "Perfect. To verify your property I'll need a few details from your "
+    "Sale Deed — the registration number, the address, and the area in sq. ft. "
+    "You can upload the document and I'll extract these, or type them in directly."
+)
+
+HOME_LOAN_PROMPT = (
+    "Would you like to choose a property from our verified pre-approved developer tie-ups "
+    "in Kolkata, or do you have a different new property in mind?"
+)
+
+EXPLAIN_CHOICE_PROMPT = (
+    "Certainly! Here is an explanation of the two home loan paths we offer:\n\n"
+    "1. **Loan Against Property (LAP)**: This option allows you to mortgage or leverage a property "
+    "you ALREADY own (like your home, flat, or land) to secure a loan. You can use these funds for personal or business needs.\n\n"
+    "2. **New Property Loan**: This is a standard home loan used to finance the purchase of a new property that you "
+    "do not own yet. You can purchase a property from our pre-approved developer tie-ups in Kolkata (which are fast-tracked "
+    "and skip extra inspections) or a new property of your own choice.\n\n"
+    "Which of these paths would you like to proceed with?"
+)
+
+OWN_CHOICE_PROMPT = (
+    "Understood. You can choose to finance your own chosen new property. "
+    "To get started, please share the property details with me (such as address and price) "
+    "or upload any property documents you have on hand for our team to review."
+)
+
+# Helper to restore UI elements based on state stage
+def resume_workflow(state: ChatState) -> dict:
+    stage = state.get("stage", "general")
+    
+    res = {
+        "stage": stage,
+        "response_type": "text",
+        "options": None,
+        "properties": None,
+        "doc_type": None,
+    }
+    
+    if stage == "awaiting_property_choice":
+        card = get_property_choice_message()
+        res["reply"] = card["message"]
+        res["response_type"] = "mcq"
+        res["options"] = card["options"]
+    elif stage == "awaiting_tie_up_choice":
+        res["reply"] = HOME_LOAN_PROMPT
+        res["response_type"] = "mcq"
+        res["options"] = TIE_UP_OPTIONS
+    elif stage == "inventory_flow":
+        shown = state.get("shown_properties", [])
+        res["reply"] = (
+            f"Here are {len(shown)} premium developer tie-up properties available in Kolkata, "
+            "all pre-approved and fast-tracked for financing. Please select one or ask me any questions about them:"
+        )
+        res["response_type"] = "property_list"
+        res["properties"] = shown
+        if state.get("selected_property_id"):
+            res["options"] = [{"id": "continue", "label": "Continue with this"}]
+    elif stage == "lap_flow":
+        res["reply"] = LAP_FLOW_PROMPT
+        res["response_type"] = "document_request"
+        res["doc_type"] = "sale_deed"
+    elif stage == "own_choice":
+        res["reply"] = OWN_CHOICE_PROMPT
+        res["response_type"] = "text"
+    else:
+        res["reply"] = "How can I help you today?"
+        res["response_type"] = "text"
+        
+    return res
+
+# Helper to construct output and merge state variables into ChatState
+def _make_node_output(state: ChatState, reply: str, response_type: str, stage: str, current_agent: str, *,
+                      options=None, properties=None, doc_type=None, sources=None,
+                      selected_property_id=None, shown_properties=None, **extra) -> dict:
+    out = _output(state["message"], reply, response_type, options=options, properties=properties,
+                  doc_type=doc_type, sources=sources, **extra)
+    
+    out["stage"] = stage
+    out["current_agent"] = current_agent
+    if selected_property_id is not None:
+        out["selected_property_id"] = selected_property_id
+    if shown_properties is not None:
+        out["shown_properties"] = shown_properties
+        
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -265,61 +373,67 @@ def _authed_entry_node(state: ChatState) -> dict:
     if not profile:
         profile = discover_account(user_context["user_id"], user_context["customer_id"])
 
-    if state.get("stage", "new") == "new":
-        card = get_property_choice_message()
-        first_name = (user_context.get("full_name") or "there").split()[0]
-        reply = f"Welcome back, {first_name}! {card['message']}"
-        out = _output(state["message"], reply, "mcq", options=card["options"])
-        out["customer_profile"] = profile
-        out["stage"] = "awaiting_property_choice"
-        out["just_handled"] = True
-        return out
+    session = get_session(state.get("session_id", ""))
+    is_existing = session.get("is_existing")
 
-    return {"customer_profile": profile, "just_handled": False}
+    stage = state.get("stage", "new")
+    selected_property_id = state.get("selected_property_id")
+    shown_properties = state.get("shown_properties", [])
+
+    if stage == "new":
+        if is_existing:
+            # Existing customer: already welcomed/greeted on the frontend. Skip duplicate welcome,
+            # transition stage, and let the router handle their actual first message.
+            return {
+                "customer_profile": profile,
+                "stage": "awaiting_property_choice",
+                "current_agent": "authed_entry_agent",
+                "just_handled": False,
+            }
+        else:
+            # New customer: greeting hasn't been shown yet. Greet them.
+            card = get_property_choice_message()
+            first_name = (user_context.get("full_name") or "there").split()[0]
+            reply = f"Welcome back, {first_name}! {card['message']}"
+            return _make_node_output(
+                state, reply, "mcq", "awaiting_property_choice", "authed_entry_agent",
+                options=card["options"],
+                customer_profile=profile,
+                just_handled=True
+            )
+
+    return {
+        "customer_profile": profile,
+        "stage": stage,
+        "selected_property_id": selected_property_id,
+        "shown_properties": shown_properties,
+        "current_agent": state.get("current_agent"),
+        "just_handled": False
+    }
 
 
 def _lap_node(state: ChatState) -> dict:
-    reply = (
-        "Perfect. To verify your property I'll need a few details from your "
-        "Sale Deed — the registration number, the address, and the area in sq. ft. "
-        "You can upload the document and I'll extract these, or type them in directly."
+    return _make_node_output(
+        state, LAP_FLOW_PROMPT, "document_request", "lap_flow", "lap_agent",
+        doc_type="sale_deed",
+        customer_profile=state.get("customer_profile")
     )
-    out = _output(state["message"], reply, "document_request", doc_type="sale_deed")
-    out["stage"] = "lap_flow"
-    return out
 
 
 def _home_loan_node(state: ChatState) -> dict:
-    reply = (
-        "Would you like to choose a property from our verified pre-approved developer tie-ups "
-        "in Kolkata, or do you have a different new property in mind?"
+    return _make_node_output(
+        state, HOME_LOAN_PROMPT, "mcq", "awaiting_tie_up_choice", "home_loan_agent",
+        options=TIE_UP_OPTIONS,
+        customer_profile=state.get("customer_profile")
     )
-    options = [
-        {"id": "tie_ups", "label": "Our Tie-ups"},
-        {"id": "own_choice", "label": "My Own Choice"},
-    ]
-    out = _output(state["message"], reply, "mcq", options=options)
-    out["stage"] = "awaiting_tie_up_choice"
-    return out
 
 
 def _explain_choice_node(state: ChatState) -> dict:
-    reply = (
-        "Certainly! Here is an explanation of the two home loan paths we offer:\n\n"
-        "1. **Loan Against Property (LAP)**: This option allows you to mortgage or leverage a property "
-        "you ALREADY own (like your home, flat, or land) to secure a loan. You can use these funds for personal or business needs.\n\n"
-        "2. **New Property Loan**: This is a standard home loan used to finance the purchase of a new property that you "
-        "do not own yet. You can purchase a property from our pre-approved developer tie-ups in Kolkata (which are fast-tracked "
-        "and skip extra inspections) or a new property of your own choice.\n\n"
-        "Which of these paths would you like to proceed with?"
+    return _make_node_output(
+        state, EXPLAIN_CHOICE_PROMPT, "mcq", "awaiting_property_choice", "explain_choice_agent",
+        options=EXPLAIN_CHOICE_OPTIONS,
+        customer_profile=state.get("customer_profile")
     )
-    options = [
-        {"id": "lap", "label": "I own a property (LAP)"},
-        {"id": "home_loan", "label": "I want to buy a new property"},
-    ]
-    out = _output(state["message"], reply, "mcq", options=options)
-    out["stage"] = "awaiting_property_choice"
-    return out
 
 
 def _show_inventory_node(state: ChatState) -> dict:
@@ -328,41 +442,51 @@ def _show_inventory_node(state: ChatState) -> dict:
         f"Here are {inv['count']} premium developer tie-up properties available in Kolkata, "
         "all pre-approved and fast-tracked for financing. Please select one or ask me any questions about them:"
     )
-    out = _output(state["message"], reply, "property_list", properties=inv["properties"])
-    out["stage"] = "inventory_flow"
-    out["shown_properties"] = inv["properties"]
-    return out
+    return _make_node_output(
+        state, reply, "property_list", "inventory_flow", "show_inventory_agent",
+        properties=inv["properties"],
+        shown_properties=inv["properties"],
+        customer_profile=state.get("customer_profile")
+    )
 
 
 def _own_choice_node(state: ChatState) -> dict:
-    reply = (
-        "Understood. You can choose to finance your own chosen new property. "
-        "To get started, please share the property details with me (such as address and price) "
-        "or upload any property documents you have on hand for our team to review."
+    return _make_node_output(
+        state, OWN_CHOICE_PROMPT, "text", "own_choice", "own_choice_agent",
+        customer_profile=state.get("customer_profile")
     )
-    out = _output(state["message"], reply, "text")
-    out["stage"] = "general"
-    return out
 
 
 def _property_followup_node(state: ChatState) -> dict:
     message = state["message"]
     lower = message.lower().strip()
     session_id = state.get("session_id", "")
+    shown_properties = state.get("shown_properties", [])
+    selected_property_id = state.get("selected_property_id")
 
     # 1. Handle "continue with this"
-    if "continue" in lower or "proceed" in lower:
+    if lower == "continue with this" or lower == "continue" or lower == "proceed":
         from session_store import mark_step
         mark_step(session_id, "property", "completed")
         mark_step(session_id, "risk", "active", set_active=True)
-        out = _output(message, "Woho! Great choice!", "text")
-        out["stage"] = "general"
-        return out
+        return _make_node_output(
+            state, "Woho! Great choice!", "text", "general", "property_followup_agent",
+            selected_property_id=selected_property_id,
+            shown_properties=shown_properties,
+            customer_profile=state.get("customer_profile")
+        )
 
     # 2. Handle database location question
-    if "where" in lower and "database" in lower and ("property" in lower or "properties" in lower):
+    if lower == "where is the property database located?" or (
+        "where" in lower and "database" in lower and ("property" in lower or "properties" in lower)
+    ):
         reply = "The property database is located at `backend/mock_data/properties.json`."
-        return _output(message, reply, "text")
+        return _make_node_output(
+            state, reply, "text", "inventory_flow", "property_followup_agent",
+            selected_property_id=selected_property_id,
+            shown_properties=shown_properties,
+            customer_profile=state.get("customer_profile")
+        )
 
     # Load all inventory properties
     inventory = _load_bank_inventory()
@@ -372,6 +496,7 @@ def _property_followup_node(state: ChatState) -> dict:
     if match:
         selected_id = match.group(1).upper()
         if selected_id in inventory:
+            selected_property_id = selected_id
             prop = inventory[selected_id]
             # Format numbers as Indian currency
             price_formatted = format_indian_currency(prop["listed_price"])
@@ -407,15 +532,18 @@ def _property_followup_node(state: ChatState) -> dict:
                     })
             
             options = [{"id": "continue", "label": "Continue with this"}]
-            out = _output(message, reply, "property_list", properties=other_props, options=options)
-            out["selected_property_id"] = selected_id
-            out["stage"] = "inventory_flow"
-            return out
+            return _make_node_output(
+                state, reply, "property_list", "inventory_flow", "property_followup_agent",
+                options=options,
+                properties=other_props,
+                selected_property_id=selected_property_id,
+                shown_properties=shown_properties,
+                customer_profile=state.get("customer_profile")
+            )
 
     # 4. Handle follow-up Q&A for selected property
-    selected_id = state.get("selected_property_id")
-    if selected_id and selected_id in inventory:
-        prop = inventory[selected_id]
+    if selected_property_id and selected_property_id in inventory:
+        prop = inventory[selected_property_id]
         try:
             resp = _client.chat.completions.create(
                 model=CHAT_DEPLOYMENT,
@@ -446,10 +574,16 @@ Guidelines:
             answer = f"Sorry, I had trouble pulling that up: {e}"
 
         options = [{"id": "continue", "label": "Continue with this"}]
-        return _output(message, answer, "text", options=options)
+        return _make_node_output(
+            state, answer, "text", "inventory_flow", "property_followup_agent",
+            options=options,
+            selected_property_id=selected_property_id,
+            shown_properties=shown_properties,
+            customer_profile=state.get("customer_profile")
+        )
 
     # Fallback to general shown properties
-    shown = state.get("shown_properties", [])
+    shown = shown_properties
     try:
         resp = _client.chat.completions.create(
             model=CHAT_DEPLOYMENT,
@@ -466,21 +600,52 @@ Guidelines:
     except Exception as e:
         answer = f"Sorry, I had trouble pulling that up: {e}"
 
-    return _output(
-        message, answer,
+    return _make_node_output(
+        state, answer,
         "property_list" if shown else "text",
+        "inventory_flow", "property_followup_agent",
         properties=shown if shown else None,
+        selected_property_id=selected_property_id,
+        shown_properties=shown,
+        customer_profile=state.get("customer_profile")
     )
 
 
 def _faq_node(state: ChatState) -> dict:
     message = state["message"]
     lower = message.lower().strip()
-    if "where" in lower and "database" in lower and ("property" in lower or "properties" in lower):
+    
+    if lower == "where is the property database located?" or (
+        "where" in lower and "database" in lower and ("property" in lower or "properties" in lower)
+    ):
         reply = "The property database is located at `backend/mock_data/properties.json`."
         return _output(message, reply, "text")
+
     answer, scored_docs = faq_agent(message, state.get("chat_history", []))
-    return _output(message, answer, "text", sources=scored_docs)
+    
+    stage = state.get("stage", "general")
+    active_stages = ("awaiting_property_choice", "awaiting_tie_up_choice", "inventory_flow", "lap_flow", "own_choice")
+    
+    if stage in active_stages:
+        workflow_res = resume_workflow(state)
+        combined_reply = answer + "\n\n" + workflow_res["reply"]
+        
+        return _make_node_output(
+            state, combined_reply, workflow_res["response_type"], stage, "faq_agent",
+            options=workflow_res.get("options"),
+            properties=workflow_res.get("properties"),
+            doc_type=workflow_res.get("doc_type"),
+            sources=scored_docs,
+            selected_property_id=state.get("selected_property_id"),
+            shown_properties=state.get("shown_properties"),
+            customer_profile=state.get("customer_profile")
+        )
+
+    return _make_node_output(
+        state, answer, "text", stage, "faq_agent",
+        sources=scored_docs,
+        customer_profile=state.get("customer_profile")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -524,37 +689,55 @@ def _route_after_entry(state: ChatState) -> str:
     message = state["message"]
     lower = message.lower().strip()
 
-    # Intercept property ID or continue/proceed or where database is located anywhere
-    if "continue" in lower or "proceed" in lower:
-        return "property_followup"
-    if "where" in lower and "database" in lower and ("property" in lower or "properties" in lower):
-        return "property_followup"
-    if re.search(r'\bbinv\d{3}\b', lower):
+    # 1. Short-circuit routing only for exact matches on UI button labels and property IDs
+    if lower == "where is the property database located?":
         return "property_followup"
 
-    # 1. Explanation query during choice stage
-    if stage == "awaiting_property_choice" and (
-        "what are those" in lower or "explain" in lower or "what is" in lower or "difference" in lower
-    ):
-        return "explain_choice"
+    # Exact property ID matching (e.g. binv001)
+    if re.match(r'^binv\d{3}$', lower):
+        return "property_followup"
 
-    # 2. Re-route choice transitions deterministically
+    # Stage-aware Continue matching
+    if lower == "continue with this" or lower == "continue" or lower == "proceed":
+        if stage == "inventory_flow":
+            return "property_followup"
+
+    # Welcome MCQ selections
     if stage == "awaiting_property_choice":
-        if "lap" in lower or "own a property" in lower or "mortgage" in lower:
+        if lower == "i own a property" or lower == "i own a property (lap)":
             return "lap"
-        elif "new property" in lower or "buy" in lower or "home loan" in lower or "buy a property" in lower:
+        if lower == "i want to buy a property" or lower == "i want to buy a new property":
             return "home_loan"
 
-    # 3. Transition from awaiting_tie_up_choice
+    # Tie-up MCQ selections
     if stage == "awaiting_tie_up_choice":
-        if "yes" in lower or "tie" in lower or "inventory" in lower or "connect" in lower or "new" in lower or "show" in lower:
+        if lower == "our tie-ups":
             return "show_inventory"
-        elif "no" in lower or "own" in lower:
+        if lower == "my own choice":
             return "own_choice"
 
+    # Global backup exact match button selectors (in case clicked from older turns)
+    if lower in ("i own a property", "i own a property (lap)", "lap"):
+        return "lap"
+    if lower in ("i want to buy a property", "i want to buy a new property"):
+        return "home_loan"
+    if lower == "our tie-ups":
+        return "show_inventory"
+    if lower == "my own choice":
+        return "own_choice"
+        
+    # Yes / No buttons
+    if lower == "yes":
+        if stage == "awaiting_tie_up_choice":
+            return "show_inventory"
+    if lower == "no":
+        if stage == "awaiting_tie_up_choice":
+            return "own_choice"
+
+    # 2. FALLBACK: Route using LLM classifier
     label = _route_stage_label(message, stage)
     if label == "property_followup" and stage != "inventory_flow":
-        label = "faq"  # nothing shown yet to follow up on
+        label = "faq"
     return label
 
 
