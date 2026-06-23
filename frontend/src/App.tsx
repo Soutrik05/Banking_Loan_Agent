@@ -27,8 +27,8 @@ export default function App() {
 
   // Poll backend session status
   useEffect(() => {
-    fetch(`${import.meta.env.VITE_API_URL}/health`).catch(() => {});
-  }, []);
+  fetch(`${import.meta.env.VITE_API_URL}/health`, { mode: 'no-cors' }).catch(() => {});
+}, []);
 
   // Poll backend session status  ← your existing useEffect stays below
   useEffect(() => {
