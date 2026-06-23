@@ -27,11 +27,16 @@ export default function App() {
 
   // Poll backend session status
   useEffect(() => {
+    fetch(`${import.meta.env.VITE_API_URL}/health`).catch(() => {});
+  }, []);
+
+  // Poll backend session status  ← your existing useEffect stays below
+  useEffect(() => {
     if (auth.step !== 'authenticated') return;
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/session/status?session_id=${SESSION_ID}`);
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/session/status?session_id=${SESSION_ID}`);
         if (!res.ok) return;
         const data = await res.json();
 
