@@ -168,3 +168,66 @@ export const updateApplication = (id: string, data: object, token: string) =>
 
 export const checkEligibility = (data: object, token: string) =>
   request('POST', '/eligibility/check', data, token);
+
+/* ─── CONVERSATIONS (persistent chat history sidebar) ─── */
+
+export interface ConversationSummary {
+  id: string;
+  customer_id: string;
+  session_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessageRow {
+  id: string;
+  conversation_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  message_type?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export const getConversations = (customerId: string) =>
+  request<ConversationSummary[]>('GET', `/conversations?customer_id=${encodeURIComponent(customerId)}`);
+
+export const getConversationMessages = (conversationId: string) =>
+  request<ConversationMessageRow[]>('GET', `/conversations/${conversationId}/messages`);
+
+export const updateConversationTitle = (conversationId: string, title: string) =>
+  request<{ success: boolean }>('PATCH', `/conversations/${conversationId}/title`, { title });
+
+/* ─── PROPERTY DOCUMENT UPLOAD (Supabase Storage) ─── */
+
+export const uploadPropertyDocument = async (
+  file: File, docType: string, sessionId: string, token: string
+) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('doc_type', docType);
+  fd.append('session_id', sessionId);
+  fd.append('token', token);
+  const res = await fetch(`${BASE_URL}/property/upload-document`, { method: 'POST', body: fd });
+  if (!res.ok) throw new Error('Property document upload failed');
+  return res.json();
+};
+
+export const getPropertyDocuments = (sessionId: string, token: string) =>
+  request('GET', `/property/documents?session_id=${sessionId}&token=${encodeURIComponent(token)}`, undefined);
+
+/* ─── SALE DEED UPLOAD (Gemini OCR → LAP property verification) ─── */
+
+export const uploadSaleDeed = async (file: File, sessionId: string, token: string, customerId: string) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("session_id", sessionId);
+  fd.append("token", token);
+  fd.append("customer_id", customerId);
+  const res = await fetch(`${BASE_URL}/property/upload-sale-deed`, {
+    method: "POST", body: fd
+  });
+  if (!res.ok) throw new Error("Sale deed upload failed");
+  return res.json();
+};

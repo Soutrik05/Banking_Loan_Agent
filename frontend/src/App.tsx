@@ -7,36 +7,36 @@ import { LoginPage } from './pages/LoginPage';
 import { FileUploader } from './components/FileUploader';
 import { useChat } from './hooks/useChat';
 import { useAuth } from './hooks/useAuth';
+import { useTheme } from './hooks/useTheme';
 import { workflowSteps, loanTypes, interestRates, creditScore } from './store/appState';
-import type { WorkflowStep, CreditScore } from './types';
-
-// Generates a fresh session id each time the tab opens — dies with the tab
-const SESSION_ID = Math.random().toString(36).slice(2);
+import type { WorkflowStep, CreditScore, Message } from './types';
 
 export default function App() {
+  // Stateful, not a module-level const — "New Application" rotates this to a
+  // brand new id so the backend starts a fresh session/conversation instead
+  // of appending to the old one. Loading a past conversation from the
+  // sidebar also reassigns this to that conversation's original session_id.
+  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID());
+
+  const { theme, toggleTheme } = useTheme();
   const {
     auth, loading, error, demoOtp, setStep,
     existingLoginStep1, existingLoginStep2,
     newUserStep1, newUserStep2,
     kycVerifyIdentity, kycRegistrationComplete,
     logout,
-  } = useAuth(SESSION_ID);
+  } = useAuth(sessionId);
 
   const [currentSteps, setCurrentSteps] = useState<WorkflowStep[]>(workflowSteps);
   const [currentCreditScore, setCurrentCreditScore] = useState<CreditScore>(creditScore);
 
   // Poll backend session status
   useEffect(() => {
-  fetch(`${import.meta.env.VITE_API_URL}/health`, { mode: 'no-cors' }).catch(() => {});
-}, []);
-
-  // Poll backend session status  ← your existing useEffect stays below
-  useEffect(() => {
     if (auth.step !== 'authenticated') return;
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/session/status?session_id=${SESSION_ID}`);
+        const res = await fetch(`http://localhost:8000/session/status?session_id=${sessionId}`);
         if (!res.ok) return;
         const data = await res.json();
 
@@ -80,7 +80,7 @@ export default function App() {
     // Set interval
     const interval = setInterval(pollStatus, 3000);
     return () => clearInterval(interval);
-  }, [auth.step]);
+  }, [auth.step, sessionId]);
 
   // Guest browsing: the login screen only shows when explicitly triggered —
   // either the user clicks Sign In, or the orchestrator detects loan intent
@@ -97,8 +97,54 @@ export default function App() {
     setShowAuthGate(true);
   };
 
+  const [initialMessages, setInitialMessages] = useState<Message[] | undefined>(undefined);
+
+  const handleLoadConversation = (
+    loadedMessages: Message[],
+    _conversationId: string,
+    conversationSessionId: string | null
+  ) => {
+    setInitialMessages(loadedMessages);
+    // Continue this conversation under its own original session_id, so any
+    // new messages the user types get appended to it instead of bleeding
+    // into whatever session_id the tab happened to be on.
+    if (conversationSessionId) {
+      setSessionId(conversationSessionId);
+    }
+  };
+
   const { messages, isTyping, inputValue, setInputValue, sendMessage, injectBotMessage, resetChat } =
-    useChat(auth.token, SESSION_ID, promptLogin);
+    useChat(auth.token, sessionId, promptLogin, initialMessages);
+
+  const handleNewApplication = () => {
+    setSessionId(crypto.randomUUID());
+    resetChat();
+    setInitialMessages(undefined);
+
+    if (auth.token) {
+      // Already authenticated — stay in the chat instead of dropping back to
+      // the guest "Existing Customer / Just Browsing" landing screen, and
+      // jump straight back into the property-choice step. KYC/account were
+      // already done for this customer, so only those two stay completed.
+      setCurrentSteps(prev =>
+        prev.map(step => ({
+          ...step,
+          status: step.id === 'auth' || step.id === 'account' ? 'completed' : 'pending',
+          subLabel: undefined,
+        }))
+      );
+      injectBotMessage(
+        "Great! Let's start a new application. Are you looking to take a loan against a property you already own, or are you looking to buy a new property using our loan?",
+        [
+          { label: 'I own a property', value: 'I own a property' },
+          { label: 'I want to buy a property', value: 'I want to buy a property' },
+        ]
+      );
+    } else {
+      setCurrentSteps(workflowSteps);
+      setCurrentCreditScore(creditScore);
+    }
+  };
 
   const showLoginGate = showAuthGate && auth.step !== 'authenticated' && auth.step !== 'financial_docs';
 
@@ -164,25 +210,33 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-[#f8f9fb] font-sans overflow-hidden">
+    <div className="flex h-screen bg-[#f8f9fb] dark:bg-[#05070d] font-sans overflow-hidden">
       {/* Left sidebar */}
       <Sidebar
         interestRates={interestRates}
         loanTypes={loanTypes}
-        onNewApplication={() => {}}
+        onNewApplication={handleNewApplication}
         isAuthenticated={auth.step === 'authenticated'}
         userName={auth.fullName}
         onLoginClick={promptLogin}
         onLogoutClick={handleLogout}
         accountNumbers={(auth.profile as any)?.account_numbers}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        token={auth.token}
+        customerId={auth.customerId}
+        onLoadConversation={handleLoadConversation}
       />
 
       {/* Main chat area */}
-      <main className="flex-1 flex flex-col bg-white min-w-0">
+      <main className="flex-1 flex flex-col min-w-0">
         <ChatWindow
           messages={messages}
           isTyping={isTyping}
           onWelcomeOption={handleWelcomeOption}
+          sessionId={sessionId}
+          token={auth.token}
+          customerId={auth.customerId}
         />
         {auth.step === 'financial_docs' && (
           <div style={{ display: 'flex', gap: 12, padding: '0 16px 12px', flexWrap: 'wrap' }}>

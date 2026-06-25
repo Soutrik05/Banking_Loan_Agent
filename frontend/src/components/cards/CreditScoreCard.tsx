@@ -20,37 +20,37 @@ export const CreditScoreCard: React.FC<CreditScoreCardProps> = ({ score }) => {
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm mt-4 hover:shadow-md transition-shadow">
+    <div className="bg-white dark:bg-[#10141f] rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm mt-4 hover:shadow-md transition-shadow">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center border border-gray-100">
-            <svg className="w-4 h-4 text-[#1e3a6e]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="w-8 h-8 rounded-lg bg-gray-50 dark:bg-gray-800 flex items-center justify-center border border-gray-100 dark:border-gray-700">
+            <svg className="w-4 h-4 text-[#1e3a6e] dark:text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <rect x="2" y="5" width="20" height="14" rx="2" strokeWidth={2} />
               <path strokeLinecap="round" d="M2 10h20" strokeWidth={2} />
             </svg>
           </div>
-          <span className="text-sm font-semibold text-gray-700">Credit Score</span>
+          <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Credit Score</span>
         </div>
         <div className="text-right">
-          <span className="text-2xl font-extrabold text-gray-900 tracking-tight">{score.value}</span>
-          <span className="text-xs font-bold text-gray-400 ml-1">/ {score.max}</span>
+          <span className="text-2xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight">{score.value}</span>
+          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 ml-1">/ {score.max}</span>
         </div>
       </div>
-      
+
       <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</p>
+        <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Status</p>
         <p className={`text-xs font-bold ${colorClass}`}>{score.label}</p>
       </div>
 
-      <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+      <div className="w-full h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full bg-gradient-to-r ${barGradient} transition-all duration-500`}
           style={{ width: `${pct}%` }}
         />
       </div>
       <div className="flex justify-between mt-1.5">
-        <span className="text-[10px] font-bold text-gray-300">300</span>
-        <span className="text-[10px] font-bold text-gray-300">{score.max}</span>
+        <span className="text-[10px] font-bold text-gray-300 dark:text-gray-600">300</span>
+        <span className="text-[10px] font-bold text-gray-300 dark:text-gray-600">{score.max}</span>
       </div>
     </div>
   );

@@ -39,13 +39,22 @@ from services.jwt_service import verify_token
 from session_store import get_session, mark_step, set_customer, reset_session, set_credit
 from mock_api.mock_cibil_api import mock_cibil_api
 from database.init_db import get_connection
+from database.conversations import (
+    get_or_create_conversation,
+    get_conversations,
+    get_conversation_messages,
+    save_message,
+    update_conversation_title,
+)
+from database.document_store import upload_property_document, get_property_documents
+from services.ocr_service import extract_sale_deed_fields
 
 app = FastAPI(title="National Bank Loan Assistant API")
 
 # Allow the React dev server to call this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000","https://banking-loan-agent.vercel.app",],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,6 +122,9 @@ class SubmitPropertyRequest(BaseModel):
 class SelectInventoryRequest(BaseModel):
     session_id: str
     property_id: str
+
+class UpdateConversationTitleRequest(BaseModel):
+    title: str
 
 
 def _get_user_from_token(token: str) -> dict:
@@ -249,6 +261,20 @@ def chat(req: ChatRequest):
         session_id=req.session_id,
         user_context=user_context,
     )
+
+    # Persist to Supabase for the conversation-history sidebar. Best-effort —
+    # a Supabase outage must never break the chat itself.
+    if user_context is not None:
+        try:
+            conversation = get_or_create_conversation(user_context["customer_id"], req.session_id)
+            conversation_id = conversation["id"]
+            save_message(conversation_id, "user", req.message)
+            save_message(conversation_id, "assistant", response["reply"], message_type=response.get("type"))
+            response["conversation_id"] = conversation_id
+        except Exception as e:
+            print(f"SUPABASE ERROR: {e}")
+    
+
     return response
 
 
@@ -441,6 +467,112 @@ def session_status(session_id: str):
 @app.post("/session/reset")
 def session_reset(session_id: str):
     return reset_session(session_id)
+
+
+# ─────────────────────────────────────────────────────────────
+# CONVERSATIONS — persistent chat history sidebar (Supabase)
+# ─────────────────────────────────────────────────────────────
+
+@app.get("/conversations")
+def list_conversations(customer_id: str):
+    try:
+        return get_conversations(customer_id)
+    except Exception:
+        return []
+
+
+@app.get("/conversations/{conversation_id}/messages")
+def list_conversation_messages(conversation_id: str):
+    try:
+        return get_conversation_messages(conversation_id)
+    except Exception:
+        return []
+
+
+@app.patch("/conversations/{conversation_id}/title")
+def rename_conversation(conversation_id: str, req: UpdateConversationTitleRequest):
+    try:
+        update_conversation_title(conversation_id, req.title)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────
+# PROPERTY DOCUMENTS — Supabase Storage uploads
+# ─────────────────────────────────────────────────────────────
+
+@app.post("/property/upload-document")
+async def property_upload_document(
+    file: UploadFile = File(...),
+    doc_type: str = Form(...),
+    session_id: str = Form(...),
+    token: str = Form(...),
+):
+    payload = verify_token(token)
+    if not payload.get("valid"):
+        raise HTTPException(status_code=401, detail=payload.get("message", "Invalid or expired session"))
+
+    file_bytes = await file.read()
+    try:
+        return upload_property_document(
+            session_id=session_id,
+            customer_id=payload["customer_id"],
+            doc_type=doc_type,
+            file_bytes=file_bytes,
+            filename=file.filename,
+        )
+    except Exception as e:
+        return {"success": False, "file_path": None, "doc_type": doc_type, "message": str(e)}
+
+
+@app.get("/property/documents")
+def property_documents(session_id: str, token: str):
+    payload = verify_token(token)
+    if not payload.get("valid"):
+        raise HTTPException(status_code=401, detail=payload.get("message", "Invalid or expired session"))
+    try:
+        return get_property_documents(session_id)
+    except Exception:
+        return []
+
+
+@app.post("/property/upload-sale-deed")
+async def property_upload_sale_deed(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    token: str = Form(...),
+    customer_id: str = Form(...),
+):
+    """
+    AI-driven Sale Deed intake for the LAP flow. Works for ANY customer's
+    ANY valid Sale Deed — OCR extracts the fields, nothing here is
+    hardcoded to a specific person or scenario.
+    """
+    user_context = _get_user_from_token(token)
+
+    file_bytes = await file.read()
+    extraction = extract_sale_deed_fields(file_bytes, file.filename, customer_id)
+    if not extraction["success"]:
+        return {"success": False, "message": extraction["message"]}
+
+    try:
+        upload_property_document(
+            session_id=session_id,
+            customer_id=user_context["customer_id"],
+            doc_type="sale_deed",
+            file_bytes=file_bytes,
+            filename=file.filename,
+        )
+    except Exception:
+        pass  # Supabase storage is best-effort here — extraction already succeeded
+
+    return {
+        "success": True,
+        "extracted_fields": extraction["extracted_fields"],
+        "message": extraction["message"],
+        "next_step": "confirm_and_verify",
+    }
 
 
 # ─────────────────────────────────────────────────────────────

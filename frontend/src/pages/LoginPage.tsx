@@ -118,7 +118,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           </div>
           <div style={{ marginBottom: 20 }}>
             <label style={label}>Password</label>
-            <input style={input} type="password" placeholder="Enter your password" value={password} onChange={e => setPassword(e.target.value)} />
+            <input 
+              style={input} 
+              type="password" 
+              placeholder="Enter your password" 
+              value={password} 
+              onChange={e => setPassword(e.target.value)} 
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !loading && userId && password) {
+                  existingLoginStep1(userId, password);
+                }
+              }}
+            />
           </div>
           <button
             style={{ ...primaryBtn, opacity: loading || !userId || !password ? 0.5 : 1 }}
@@ -148,7 +159,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <DemoOtpBanner />
           <div style={{ marginBottom: 24 }}>
             <label style={label}>Enter OTP</label>
-            <input style={{ ...input, letterSpacing: '0.2em' }} placeholder="6-digit OTP" maxLength={6} value={otp} onChange={e => setOtp(e.target.value)} />
+            <input 
+              style={{ ...input, letterSpacing: '0.2em' }} 
+              placeholder="6-digit OTP" 
+              maxLength={6} 
+              value={otp} 
+              onChange={e => setOtp(e.target.value)} 
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !loading && otp.length >= 6) {
+                  existingLoginStep2(otp);
+                }
+              }}
+            />
           </div>
           <button
             style={{ ...primaryBtn, opacity: loading || otp.length < 6 ? 0.5 : 1 }}
@@ -171,7 +193,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <ErrorBanner />
           <div style={{ marginBottom: 20 }}>
             <label style={label}>Mobile Number</label>
-            <input style={input} type="tel" placeholder="+91 98765 43210" value={phone} onChange={e => setPhone(e.target.value)} />
+            <input 
+              style={input} 
+              type="tel" 
+              placeholder="+91 98765 43210" 
+              value={phone} 
+              onChange={e => setPhone(e.target.value)} 
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !loading && phone.length >= 10) {
+                  newUserStep1(phone);
+                }
+              }}
+            />
           </div>
           <button
             style={{ ...primaryBtn, opacity: loading || phone.length < 10 ? 0.5 : 1 }}
@@ -201,7 +234,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <DemoOtpBanner />
           <div style={{ marginBottom: 24 }}>
             <label style={label}>Enter OTP</label>
-            <input style={{ ...input, letterSpacing: '0.2em' }} placeholder="6-digit OTP" maxLength={6} value={otp} onChange={e => setOtp(e.target.value)} />
+            <input 
+              style={{ ...input, letterSpacing: '0.2em' }} 
+              placeholder="6-digit OTP" 
+              maxLength={6} 
+              value={otp} 
+              onChange={e => setOtp(e.target.value)} 
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !loading && otp.length >= 6) {
+                  newUserStep2(otp);
+                }
+              }}
+            />
           </div>
           <button
             style={{ ...primaryBtn, opacity: loading || otp.length < 6 ? 0.5 : 1 }}
@@ -266,6 +310,20 @@ if (step === 'kyc') {
             onChange={(e) => {
               setAadhaar(e.target.value);
               setKycError('');
+            }}
+            onKeyDown={async (e) => {
+              if (e.key === 'Enter' && !loading) {
+                if (!pan.trim() || !aadhaar.trim()) {
+                  setKycError('* Empty fields');
+                  return;
+                }
+                try {
+                  await kycVerifyIdentity(aadhaar, pan);
+                } catch (err) {
+                  console.error(err);
+                  setKycError('KYC Verification Failed');
+                }
+              }
             }}
           />
         </div>

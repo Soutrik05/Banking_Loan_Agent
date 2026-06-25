@@ -64,7 +64,9 @@ from agents.financial_document_agent import (
     get_upload_status,
     is_awaiting_documents,
 )
-from session_store import get_session
+from session_store import get_session, mark_step
+from agents.property_verification_agent import verify_property
+from agents.risk_assessment_agent import assess_risk
 from prompts.router_prompt import ROUTER_SYSTEM_PROMPT, PROPERTY_QA_SYSTEM_PROMPT
 from utils.config import (
     AZURE_OPENAI_API_KEY,
@@ -90,10 +92,21 @@ class ChatState(TypedDict, total=False):
     user_context: Optional[dict]
     customer_profile: Optional[dict]
     chat_history: Annotated[list, operator.add]
-    stage: Literal["new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow", "inventory_flow", "own_choice", "general"]
+    stage: Literal[
+        "new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow",
+        "inventory_flow", "own_choice", "general",
+        "property_document_requested", "property_verification", "risk_assessment",
+        "credit_assessment",
+    ]
     shown_properties: list
     selected_property_id: Optional[str]
     just_handled: bool  # set by authed_entry/kyc every turn; True only when the node produced the terminal reply itself
+
+    # LAP property pipeline: Sale Deed fields confirmed by the user, plus the
+    # results of the two agent checks that run against them.
+    property_data: Optional[dict]
+    property_verification_result: Optional[dict]
+    risk_assessment_result: Optional[dict]
 
     # New-customer, pre-JWT onboarding stage (KYC identity verified, financial
     # documents being collected). Kept separate from `stage` above: once
@@ -364,10 +377,31 @@ def _financial_document_node(state: ChatState) -> dict:
     return _output(message, reply, "document_request", doc_type="financial_documents")
 
 
+# Exact button-label matches that mean the property-choice question has
+# already been answered — kept in sync with _route_after_entry's matching
+# below. Used to stop _authed_entry_node from re-asking the question on a
+# fresh thread (e.g. a rotated session_id from "New Application") when the
+# user's first message in it is already an answer.
+_PROPERTY_CHOICE_ANSWERS = (
+    "i own a property", "i own a property (lap)", "lap",
+    "i want to buy a property", "i want to buy a new property",
+)
+
+
 def _authed_entry_node(state: ChatState) -> dict:
     """Loads/refreshes the customer profile. On the very first authenticated
     turn of a session, also greets and asks the property question directly
-    (terminal for this turn) — every later turn falls through to routing."""
+    (terminal for this turn) — every later turn falls through to routing.
+
+    The welcome greeting must NEVER re-fire once the customer is already
+    past it (lap_flow, property_document_requested, risk_assessment, ...).
+    Stage itself already guards this in the normal case (it's only "new"
+    on the very first turn of a thread). But MemorySaver is in-memory, so a
+    backend restart mid-conversation wipes the checkpoint and makes a
+    later turn look like stage=="new" again. The mid_flow_message check
+    below is a second, message-shape-based guard so a turn that's clearly
+    deep in the property pipeline (e.g. the Sale Deed confirm-and-proceed
+    payload) never gets re-greeted even if the persisted stage was lost."""
     user_context = state["user_context"]
     profile = state.get("customer_profile")
     if not profile:
@@ -379,11 +413,27 @@ def _authed_entry_node(state: ChatState) -> dict:
     stage = state.get("stage", "new")
     selected_property_id = state.get("selected_property_id")
     shown_properties = state.get("shown_properties", [])
+    message = state["message"]
+    already_answered = message.lower().strip() in _PROPERTY_CHOICE_ANSWERS
+    mid_flow_message = "registration_number" in message or message.strip().startswith("PROPERTY_DATA:")
 
     if stage == "new":
-        if is_existing:
-            # Existing customer: already welcomed/greeted on the frontend. Skip duplicate welcome,
-            # transition stage, and let the router handle their actual first message.
+        if mid_flow_message:
+            # Don't touch stage at all — _route_after_entry's
+            # registration_number short-circuit routes this correctly to
+            # property_verification regardless of whatever stage says.
+            return {
+                "customer_profile": profile,
+                "current_agent": "authed_entry_agent",
+                "just_handled": False,
+            }
+        if is_existing or already_answered:
+            # Existing customer (already welcomed/greeted on the frontend), or a
+            # fresh thread whose first message is already an answer to the
+            # property-choice question (e.g. "New Application" re-showed the
+            # question locally and the user clicked a button) — skip the
+            # duplicate welcome, transition stage, and let the router handle
+            # their actual message.
             return {
                 "customer_profile": profile,
                 "stage": "awaiting_property_choice",
@@ -454,6 +504,91 @@ def _own_choice_node(state: ChatState) -> dict:
     return _make_node_output(
         state, OWN_CHOICE_PROMPT, "text", "own_choice", "own_choice_agent",
         customer_profile=state.get("customer_profile")
+    )
+
+
+PROPERTY_DOCUMENT_UPLOAD_PROMPT = (
+    "Please upload your Sale Deed document — our AI will automatically extract "
+    "the registration number, owner details, and property address from it."
+)
+
+
+def _property_document_upload_node(state: ChatState) -> dict:
+    """Asks for the Sale Deed once the customer has chosen LAP / their own
+    property, before any property_data has been confirmed. Works for any
+    customer's any document — nothing here is hardcoded."""
+    return _make_node_output(
+        state, PROPERTY_DOCUMENT_UPLOAD_PROMPT, "property_document_upload",
+        "property_document_requested", "property_document_upload_agent",
+        doc_type="sale_deed",
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+def _property_verification_node(state: ChatState) -> dict:
+    """Triggered when the frontend sends back the Sale Deed fields the user
+    confirmed (message contains a PROPERTY_DATA JSON payload). Verifies the
+    property against the (mock) land registry for whichever registration
+    number/owner/address came through — works for any customer's property."""
+    message = state["message"]
+    session_id = state.get("session_id", "")
+
+    match = re.search(r"\{.*\}", message, re.DOTALL)
+    try:
+        data = json.loads(match.group(0) if match else message)
+    except Exception:
+        reply = "Sorry, I couldn't read those property details. Please try uploading the document again."
+        return _make_node_output(
+            state, reply, "text", "general", "property_verification_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    result = verify_property(
+        registration_number=data.get("registration_number"),
+        owner_name=data.get("owner_name"),
+        owner_pan=data.get("owner_pan"),
+        address=data.get("address"),
+        area_sqft=data.get("area_sqft"),
+    )
+
+    mark_step(session_id, "property", "completed" if result["verified"] else "failed")
+
+    next_stage = "risk_assessment" if result["verified"] else "general"
+
+    return _make_node_output(
+        state, result["summary"], "text", next_stage, "property_verification_agent",
+        customer_profile=state.get("customer_profile"),
+        property_data=data,
+        property_verification_result=result,
+    )
+
+
+def _risk_assessment_node(state: ChatState) -> dict:
+    """Triggered once property verification has approved the property
+    (stage == 'risk_assessment'). Pulls live risk signals for whichever
+    customer is authenticated this session — nothing hardcoded."""
+    session_id = state.get("session_id", "")
+    user_context = state.get("user_context") or {}
+    customer_id = user_context.get("customer_id")
+
+    if customer_id:
+        result = assess_risk(customer_id)
+    else:
+        result = {
+            "risk_level": "high", "risk_score": 100, "approved": False,
+            "risk_flags": ["missing_customer_id"], "monthly_income": 0,
+            "total_existing_emi": 0, "foir": 0,
+            "summary": "❌ Could not run risk assessment — missing customer information.",
+        }
+
+    mark_step(session_id, "risk", "completed" if result["approved"] else "failed")
+
+    next_stage = "credit_assessment" if result["approved"] else "general"
+
+    return _make_node_output(
+        state, result["summary"], "text", next_stage, "risk_assessment_agent",
+        customer_profile=state.get("customer_profile"),
+        risk_assessment_result=result,
     )
 
 
@@ -689,6 +824,16 @@ def _route_after_entry(state: ChatState) -> str:
     message = state["message"]
     lower = message.lower().strip()
 
+    # 0. Property pipeline — always wins over everything else below.
+    # The Sale Deed confirm-and-proceed card sends back the extracted
+    # fields as a registration_number-bearing JSON payload, regardless of
+    # whatever stage we're currently in.
+    if "registration_number" in message:
+        return "property_verification"
+
+    if stage == "risk_assessment":
+        return "risk_assessment"
+
     # 1. Short-circuit routing only for exact matches on UI button labels and property IDs
     if lower == "where is the property database located?":
         return "property_followup"
@@ -764,6 +909,9 @@ _graph.add_node("show_inventory", _show_inventory_node)
 _graph.add_node("own_choice", _own_choice_node)
 _graph.add_node("property_followup", _property_followup_node)
 _graph.add_node("faq", _faq_node)
+_graph.add_node("property_document_upload", _property_document_upload_node)
+_graph.add_node("property_verification", _property_verification_node)
+_graph.add_node("risk_assessment", _risk_assessment_node)
 
 _graph.add_conditional_edges(
     START, _route_entry,
@@ -787,13 +935,34 @@ _graph.add_conditional_edges(
         "own_choice": "own_choice",
         "property_followup": "property_followup",
         "faq": "faq",
+        "property_verification": "property_verification",
+        "risk_assessment": "risk_assessment",
     },
 )
-_graph.add_edge("lap", END)
+
+
+def _route_after_property_choice(state: ChatState) -> str:
+    """After lap_flow / own_choice sets in: if the Sale Deed hasn't been
+    confirmed yet, immediately ask for it in the same turn."""
+    if not state.get("property_data"):
+        return "property_document_upload"
+    return "end"
+
+
+_graph.add_conditional_edges(
+    "lap", _route_after_property_choice,
+    {"property_document_upload": "property_document_upload", "end": END},
+)
+_graph.add_conditional_edges(
+    "own_choice", _route_after_property_choice,
+    {"property_document_upload": "property_document_upload", "end": END},
+)
+_graph.add_edge("property_document_upload", END)
+_graph.add_edge("property_verification", END)
+_graph.add_edge("risk_assessment", END)
 _graph.add_edge("home_loan", END)
 _graph.add_edge("explain_choice", END)
 _graph.add_edge("show_inventory", END)
-_graph.add_edge("own_choice", END)
 _graph.add_edge("property_followup", END)
 _graph.add_edge("faq", END)
 

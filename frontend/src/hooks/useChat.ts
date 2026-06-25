@@ -1,12 +1,31 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Message } from '../types';
 import { sendChatMessage } from '../services/api';
 
-export function useChat(token: string | null, sessionId: string, onAuthRequired?: () => void) {
+export function useChat(
+  token: string | null,
+  sessionId: string,
+  onAuthRequired?: () => void,
+  initialMessages?: Message[]
+) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const sessionRef = useRef(sessionId);
+
+  // sessionId can change after mount — a new "New Application" id, or a past
+  // conversation's original session_id once it's loaded. Keep the ref (read
+  // by sendMessage) in sync, otherwise every message keeps going to whatever
+  // session was active on the very first render.
+  useEffect(() => {
+    sessionRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (initialMessages && initialMessages.length > 0) {
+      setMessages(initialMessages);
+    }
+  }, [initialMessages]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim()) return;
