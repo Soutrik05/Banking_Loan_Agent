@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import type { Message } from '../../types';
-import { uploadPropertyDoc, getPropertyDocuments } from '../../services/api';
+import { uploadPropertyDoc, getPropertyDocuments, bookAppointment } from '../../services/api';
 
 interface MessageBubbleProps {
   message: Message;
@@ -157,6 +157,196 @@ const LoanDecisionCardFromMessage: React.FC<{ content: string }> = ({ content })
   } catch {
     return null;
   }
+};
+
+const APPOINTMENT_BOOKED_PREFIX = 'APPOINTMENT_BOOKED:';
+
+interface AppointmentBookedData {
+  appointment_date: string;
+  appointment_time: string;
+  branch: string;
+  contact_phone?: string;
+  appointment_id?: string;
+}
+
+const AppointmentConfirmedCard: React.FC<{ content: string }> = ({ content }) => {
+  let data: AppointmentBookedData | null = null;
+  try {
+    data = JSON.parse(content.slice(APPOINTMENT_BOOKED_PREFIX.length));
+  } catch {
+    data = null;
+  }
+  if (!data) return null;
+
+  return (
+    <div className="flex justify-start animate-fade-in">
+      <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] shadow-md shadow-blue-500/10 flex items-center justify-center mr-3 flex-shrink-0 mt-0.5">
+        <span className="text-white text-xs font-black">B</span>
+      </div>
+      <div className="max-w-[72%] rounded-2xl rounded-tl-none border-l-[3px] border-emerald-500 bg-emerald-50/80 dark:bg-emerald-500/10 px-4 py-3 shadow-sm">
+        <p className="text-sm font-bold text-emerald-700 dark:text-emerald-400 mb-2">✅ Appointment Confirmed!</p>
+        <div className="space-y-1 text-xs text-gray-700 dark:text-gray-200">
+          <p>📅 Date: <span className="font-semibold">{data.appointment_date}</span></p>
+          <p>🕐 Time: <span className="font-semibold">{data.appointment_time}</span></p>
+          <p>🏦 Branch: <span className="font-semibold">{data.branch}</span></p>
+          {data.contact_phone && (
+            <p>📞 We'll call you at: <span className="font-semibold">{data.contact_phone}</span></p>
+          )}
+        </div>
+        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2 leading-relaxed">
+          Our property verification team will review your case and contact you before the appointment.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+const APPOINTMENT_TIME_SLOTS = ['10:00 AM', '11:00 AM', '12:00 PM', '2:00 PM', '3:00 PM', '4:00 PM'];
+const APPOINTMENT_BRANCHES = [
+  'Ballygunge Branch',
+  'Salt Lake Branch',
+  'New Town Branch',
+  'Dum Dum Branch',
+  'Tollygunge Branch',
+  'Park Street Branch',
+];
+
+function isoDateOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+const AppointmentFormCard: React.FC<{
+  sessionId: string;
+  token: string | null;
+  customerId: string | null;
+  customerPhone?: string;
+  onConfirm: (message: string) => void;
+}> = ({ sessionId, token, customerId, customerPhone, onConfirm }) => {
+  const [date, setDate] = useState('');
+  const [time, setTime] = useState('');
+  const [branch, setBranch] = useState('');
+  const [phone, setPhone] = useState(customerPhone ?? '');
+  const [status, setStatus] = useState<'idle' | 'booking' | 'error'>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [booked, setBooked] = useState(false);
+
+  const reason = 'Property verification — manual review required';
+  const canSubmit = !!date && !!time && !!branch && !!phone.trim();
+
+  const handleSubmit = async () => {
+    if (!canSubmit || !token || !customerId) return;
+    setStatus('booking');
+    setErrorMsg('');
+    try {
+      const data: any = await bookAppointment({
+        customer_id: customerId,
+        session_id: sessionId,
+        appointment_date: date,
+        appointment_time: time,
+        branch,
+        reason,
+        contact_phone: phone,
+        token,
+      });
+      if (data?.success) {
+        setBooked(true);
+        onConfirm(`${APPOINTMENT_BOOKED_PREFIX} ${JSON.stringify({
+          appointment_date: date,
+          appointment_time: time,
+          branch,
+          contact_phone: phone,
+          appointment_id: data.appointment_id,
+        })}`);
+      } else {
+        setErrorMsg(data?.message || 'Booking failed. Please try again.');
+        setStatus('error');
+      }
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'Booking failed. Please try again.');
+      setStatus('error');
+    }
+  };
+
+  if (booked) return null; // the APPOINTMENT_BOOKED bubble takes over from here
+
+  return (
+    <div className="bg-white dark:bg-[#10141f] border border-gray-150 dark:border-gray-800 rounded-2xl shadow-sm max-w-md animate-fade-in overflow-hidden">
+      <div className="bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] px-5 py-3 flex items-center gap-2">
+        <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <path strokeLinecap="round" d="M16 2v4M8 2v4M3 10h18" />
+        </svg>
+        <h3 className="text-sm font-bold text-white">Book an Appointment</h3>
+      </div>
+      <div className="p-5 space-y-3">
+        <div>
+          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1">Preferred Date</label>
+          <input
+            type="date"
+            value={date}
+            min={isoDateOffset(1)}
+            max={isoDateOffset(30)}
+            onChange={e => setDate(e.target.value)}
+            className="w-full text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 outline-none focus:border-[#1e3a6e] dark:focus:border-blue-400"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1">Preferred Time</label>
+          <select
+            value={time}
+            onChange={e => setTime(e.target.value)}
+            className="w-full text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 outline-none focus:border-[#1e3a6e] dark:focus:border-blue-400"
+          >
+            <option value="">Select a time</option>
+            {APPOINTMENT_TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1">Branch</label>
+          <select
+            value={branch}
+            onChange={e => setBranch(e.target.value)}
+            className="w-full text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 outline-none focus:border-[#1e3a6e] dark:focus:border-blue-400"
+          >
+            <option value="">Select a branch</option>
+            {APPOINTMENT_BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1">Contact Phone</label>
+          <input
+            type="text"
+            value={phone}
+            onChange={e => setPhone(e.target.value)}
+            className="w-full text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 outline-none focus:border-[#1e3a6e] dark:focus:border-blue-400"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1">Reason</label>
+          <input
+            type="text"
+            value={reason}
+            readOnly
+            className="w-full text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 outline-none cursor-not-allowed"
+          />
+        </div>
+
+        {status === 'error' && (
+          <p className="text-xs text-red-500 dark:text-red-400">{errorMsg}</p>
+        )}
+
+        <button
+          onClick={handleSubmit}
+          disabled={!canSubmit || status === 'booking'}
+          className="w-full bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] hover:brightness-110 active:scale-[0.98] text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {status === 'booking' ? 'Booking your appointment...' : 'Confirm Appointment'}
+        </button>
+      </div>
+    </div>
+  );
 };
 
 interface ExtractedSaleDeedFields {
@@ -388,6 +578,84 @@ const SaleDeedUploadCard: React.FC<{
   );
 };
 
+interface ValuationResultData {
+  fair_market_value: number;
+  distress_value: number;
+  max_loan_lap: number;
+  max_loan_home: number;
+  locality: string;
+  locality_rate_per_sqft: number;
+  area_sqft: number;
+  valuation_grade: 'A' | 'B' | 'C';
+  valuation_grade_desc: string;
+}
+
+function formatINRFull(n?: number | null): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return `₹${Math.round(n).toLocaleString('en-IN')}`;
+}
+
+const VALUATION_GRADE_BADGE_STYLES: Record<string, string> = {
+  A: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-400',
+  B: 'bg-blue-100 text-blue-700 dark:bg-blue-400/10 dark:text-blue-300',
+  C: 'bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400',
+};
+
+const ValuationCard: React.FC<{ data: ValuationResultData }> = ({ data }) => {
+  const gradeStyle = VALUATION_GRADE_BADGE_STYLES[data.valuation_grade] ?? VALUATION_GRADE_BADGE_STYLES.C;
+
+  return (
+    <div className="rounded-2xl border border-gray-150 dark:border-gray-800 bg-white dark:bg-[#10141f] shadow-sm max-w-md animate-fade-in overflow-hidden">
+      <div className="bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] px-5 py-3 flex items-center gap-2">
+        <span className="text-base">🏠</span>
+        <h3 className="text-sm font-bold text-white uppercase tracking-wide">Property Valuation Report</h3>
+      </div>
+      <div className="p-5 space-y-3">
+        <div className="space-y-1.5 text-xs pb-3 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400">Locality</span>
+            <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">{data.locality}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400">Area</span>
+            <span className="font-semibold text-gray-800 dark:text-gray-100">
+              {data.area_sqft?.toLocaleString('en-IN')} sq.ft.
+            </span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400">Circle Rate</span>
+            <span className="font-semibold text-gray-800 dark:text-gray-100">
+              {formatINRFull(data.locality_rate_per_sqft)}/sq.ft.
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-1.5 text-xs pb-3 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400">Fair Market Value</span>
+            <span className="font-bold text-gray-900 dark:text-gray-50">{formatINRFull(data.fair_market_value)}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400">Distress Value</span>
+            <span className="font-semibold text-gray-700 dark:text-gray-300">{formatINRFull(data.distress_value)}</span>
+          </div>
+          <div className="flex justify-between gap-3 items-center">
+            <span className="text-gray-500 dark:text-gray-400">Max Loan (LAP)</span>
+            <span className="font-bold text-emerald-600 dark:text-emerald-400">{formatINRFull(data.max_loan_lap)}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-gray-500 dark:text-gray-400">Valuation Grade</span>
+          <span className={`text-[11px] font-bold px-2 py-1 rounded-lg ${gradeStyle}`}>
+            [{data.valuation_grade}] {data.valuation_grade_desc}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 interface ChatWindowProps {
   messages: Message[];
   isTyping: boolean;
@@ -395,9 +663,10 @@ interface ChatWindowProps {
   sessionId: string;
   token: string | null;
   customerId: string | null;
+  customerPhone?: string;
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId, customerPhone }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -465,6 +734,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
         // to the backend, not something the user should see as a chat bubble.
         if (msg.role === 'user' && msg.content.startsWith('PROPERTY_DATA:')) {
           return null;
+        }
+        // The appointment-booked notification is internal too (sent right
+        // after a successful /appointments/book call) — render the
+        // confirmation card in its place instead of the raw JSON, for
+        // either role since the frontend sends it as a "user" message.
+        if (msg.content.startsWith(APPOINTMENT_BOOKED_PREFIX)) {
+          return (
+            <div key={msg.id} className="space-y-2">
+              <AppointmentConfirmedCard content={msg.content} />
+            </div>
+          );
         }
         return (
         <div key={msg.id} className="space-y-2">
@@ -577,6 +857,28 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
                 requiredDocuments={msg.metadata?.required_documents as string[] | undefined}
                 onConfirm={onWelcomeOption}
               />
+            </div>
+          )}
+
+          {/* Manual-review appointment booking form */}
+          {msg.role === 'assistant' && msg.type === 'appointment_form' && (
+            <div className="pl-11 animate-fade-in">
+              <AppointmentFormCard
+                sessionId={sessionId}
+                token={token}
+                customerId={customerId}
+                customerPhone={customerPhone}
+                onConfirm={onWelcomeOption}
+              />
+            </div>
+          )}
+
+          {/* Property valuation report — shown below the text summary whenever this
+              turn ran the valuation step, regardless of which node ended up terminal
+              for it (the auto-chain means valuation never stops there itself). */}
+          {msg.role === 'assistant' && !!msg.metadata?.valuation_result && (
+            <div className="pl-11 animate-fade-in">
+              <ValuationCard data={msg.metadata.valuation_result as ValuationResultData} />
             </div>
           )}
 

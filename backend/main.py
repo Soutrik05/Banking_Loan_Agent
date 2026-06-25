@@ -48,6 +48,7 @@ from database.conversations import (
     generate_conversation_title,
 )
 from database.document_store import upload_property_document, get_property_documents
+from database.appointments import create_appointment, get_appointment
 from services.ocr_service import extract_sale_deed_fields
 
 app = FastAPI(title="National Bank Loan Assistant API")
@@ -126,6 +127,16 @@ class SelectInventoryRequest(BaseModel):
 
 class UpdateConversationTitleRequest(BaseModel):
     title: str
+
+class AppointmentRequest(BaseModel):
+    customer_id: str
+    session_id: str
+    appointment_date: str
+    appointment_time: str
+    branch: str
+    reason: str
+    contact_phone: Optional[str] = None
+    token: str
 
 
 def _get_user_from_token(token: str) -> dict:
@@ -593,6 +604,49 @@ async def property_upload_sale_deed(
         "message": extraction["message"],
         "next_step": "confirm_and_verify",
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# APPOINTMENTS — manual-review property verification follow-up
+# ─────────────────────────────────────────────────────────────
+
+@app.post("/appointments/book")
+def book_appointment(req: AppointmentRequest):
+    """
+    Books a property-verification appointment for ANY authenticated
+    customer. Works the same regardless of who's logged in — every
+    field comes from the request body, nothing hardcoded.
+    """
+    user_context = _get_user_from_token(req.token)
+    try:
+        appointment = create_appointment(
+            customer_id=req.customer_id,
+            customer_name=user_context.get("full_name") or "Customer",
+            session_id=req.session_id,
+            appointment_date=req.appointment_date,
+            appointment_time=req.appointment_time,
+            branch=req.branch,
+            reason=req.reason,
+            contact_phone=req.contact_phone,
+        )
+        if not appointment:
+            return {"success": False, "message": "Could not book the appointment. Please try again."}
+        return {
+            "success": True,
+            "appointment_id": appointment.get("id"),
+            "message": "Appointment confirmed!",
+        }
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@app.get("/appointments/{session_id}")
+def fetch_appointment(session_id: str, token: str):
+    _get_user_from_token(token)
+    try:
+        return {"appointment": get_appointment(session_id)}
+    except Exception:
+        return {"appointment": None}
 
 
 # ─────────────────────────────────────────────────────────────

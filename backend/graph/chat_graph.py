@@ -66,6 +66,7 @@ from agents.financial_document_agent import (
 )
 from session_store import get_session, mark_step
 from agents.property_verification_agent import verify_property
+from agents.property_valuation_agent import valuate_property
 from agents.risk_assessment_agent import assess_risk
 from agents.credit_assessment_agent import assess_credit
 from agents.loan_decision_agent import make_loan_decision
@@ -98,8 +99,9 @@ class ChatState(TypedDict, total=False):
         "new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow",
         "inventory_flow", "own_choice", "general",
         "awaiting_acquisition_type",
-        "property_document_requested", "property_verification", "risk_assessment",
-        "credit_assessment",
+        "property_document_requested", "property_verification", "property_valuation",
+        "risk_assessment", "credit_assessment",
+        "awaiting_appointment_decision", "awaiting_appointment_form",
     ]
     shown_properties: list
     selected_property_id: Optional[str]
@@ -109,6 +111,7 @@ class ChatState(TypedDict, total=False):
     # results of the two agent checks that run against them.
     property_data: Optional[dict]
     property_verification_result: Optional[dict]
+    valuation_result: Optional[dict]
     risk_assessment_result: Optional[dict]
     credit_assessment_result: Optional[dict]
     loan_decision_result: Optional[dict]
@@ -117,6 +120,11 @@ class ChatState(TypedDict, total=False):
     # are required before the property pipeline can proceed.
     acquisition_type: Optional[str]
     required_documents: Optional[list]
+
+    # Manual-review appointment booking, offered when property verification
+    # comes back as "manual_review" rather than a clean approve/reject.
+    appointment_booked: Optional[bool]
+    appointment_data: Optional[dict]
 
     # New-customer, pre-JWT onboarding stage (KYC identity verified, financial
     # documents being collected). Kept separate from `stage` above: once
@@ -636,13 +644,56 @@ def _property_verification_node(state: ChatState) -> dict:
 
     mark_step(session_id, "property", "completed" if result["verified"] else "failed")
 
-    next_stage = "risk_assessment" if result["verified"] else "general"
+    if result.get("status") == "manual_review":
+        reply = (
+            result["summary"]
+            + "\n\nWould you like to book an appointment with our property "
+              "verification team to resolve this?"
+        )
+        return _make_node_output(
+            state, reply, "manual_review_appointment", "awaiting_appointment_decision",
+            "property_verification_agent",
+            customer_profile=state.get("customer_profile"),
+            property_data=data,
+            property_verification_result=result,
+        )
+
+    next_stage = "property_valuation" if result["verified"] else "general"
 
     return _make_node_output(
         state, result["summary"], "text", next_stage, "property_verification_agent",
         customer_profile=state.get("customer_profile"),
         property_data=data,
         property_verification_result=result,
+    )
+
+
+def _property_valuation_node(state: ChatState) -> dict:
+    """Reached only by being chained directly after an approved property
+    verification, in the SAME turn (see _route_after_verification) — pure
+    calculation, ZERO LLM calls. Simulates a bank-appointed technical
+    valuation for whichever property just got verified; nothing here is
+    hardcoded to a specific customer or property. Always unconditionally
+    chains straight into risk assessment next (see the plain edge in the
+    graph wiring below — there's no failure branch for valuation itself)."""
+    property_result = state.get("property_verification_result") or {}
+
+    result = valuate_property(
+        area_sqft=property_result.get("area_sqft") or 0,
+        address=property_result.get("address") or "",
+        property_type=property_result.get("property_type") or "residential_apartment",
+        registration_number=property_result.get("registration_number") or "",
+        government_value=property_result.get("government_value") or 0,
+    )
+
+    prior_reply = state.get("reply") or ""
+    combined_reply = f"{prior_reply}\n\n{result['summary']}" if prior_reply else result["summary"]
+
+    return _make_node_output(
+        state, combined_reply, "valuation_result", "property_valuation", "property_valuation_agent",
+        metadata={"valuation_result": result},
+        customer_profile=state.get("customer_profile"),
+        valuation_result=result,
     )
 
 
@@ -675,6 +726,7 @@ def _risk_assessment_node(state: ChatState) -> dict:
 
     return _make_node_output(
         state, combined_reply, "text", next_stage, "risk_assessment_agent",
+        metadata={"valuation_result": state.get("valuation_result")},
         customer_profile=state.get("customer_profile"),
         risk_assessment_result=result,
     )
@@ -691,8 +743,8 @@ def _credit_assessment_node(state: ChatState) -> dict:
     session_id = state.get("session_id", "")
     user_context = state.get("user_context") or {}
     customer_id = user_context.get("customer_id")
-    property_result = state.get("property_verification_result") or {}
-    max_loan = property_result.get("max_loan_eligible") or 0
+    valuation_result = state.get("valuation_result") or {}
+    max_loan = valuation_result.get("max_loan_lap") or 0
 
     if customer_id:
         result = assess_credit(customer_id, max_loan)
@@ -711,6 +763,7 @@ def _credit_assessment_node(state: ChatState) -> dict:
 
     return _make_node_output(
         state, combined_reply, "text", "general", "credit_assessment_agent",
+        metadata={"valuation_result": state.get("valuation_result")},
         customer_profile=state.get("customer_profile"),
         credit_assessment_result=result,
     )
@@ -737,8 +790,90 @@ def _loan_decision_node(state: ChatState) -> dict:
 
     return _make_node_output(
         state, decision_result["summary"], "text", "general", "loan_decision_agent",
+        metadata={"valuation_result": state.get("valuation_result")},
         customer_profile=state.get("customer_profile"),
         loan_decision_result=decision_result,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Manual-review appointment booking
+# ---------------------------------------------------------------------------
+
+APPOINTMENT_YES_PATTERNS = [
+    "yes", "book", "appointment", "sure", "okay", "ok",
+    "please", "want to", "schedule", "fix", "arrange", "ya", "yep", "yup",
+]
+APPOINTMENT_NO_PATTERNS = [
+    "no", "later", "not now", "maybe", "skip", "cancel",
+    "dont", "don't", "nope", "nah",
+]
+APPOINTMENT_QUESTION_WORDS = (
+    "what", "why", "how", "when", "where", "who", "which", "can", "is", "are", "does", "do",
+)
+
+
+def _appointment_decision_node(state: ChatState) -> dict:
+    """Detects yes/no/question intent for the manual-review appointment
+    offer — instant, no LLM call for the yes/no/default branches. Works
+    for any customer's message text, nothing hardcoded."""
+    message = state["message"]
+    message_lower = message.strip().lower()
+
+    if any(p in message_lower for p in APPOINTMENT_YES_PATTERNS):
+        reply = "Great! Please fill in your appointment details below."
+        return _make_node_output(
+            state, reply, "appointment_form", "awaiting_appointment_form", "appointment_decision_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    if any(p in message_lower for p in APPOINTMENT_NO_PATTERNS):
+        reply = (
+            "No problem. You can book an appointment anytime by typing "
+            "'book appointment'. Our team will also reach out to you within 2 business days."
+        )
+        return _make_node_output(
+            state, reply, "text", "general", "appointment_decision_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    is_question = "?" in message_lower or message_lower.startswith(APPOINTMENT_QUESTION_WORDS)
+    if is_question:
+        answer, scored_docs = faq_agent(message, state.get("chat_history", []))
+        combined = answer + "\n\nWould you still like to book an appointment with our property verification team?"
+        return _make_node_output(
+            state, combined, "text", "awaiting_appointment_decision", "appointment_decision_agent",
+            sources=scored_docs,
+            customer_profile=state.get("customer_profile"),
+        )
+
+    reply = (
+        "I didn't quite catch that. Would you like to book an appointment with our "
+        "verification team? Please say Yes or No."
+    )
+    return _make_node_output(
+        state, reply, "text", "awaiting_appointment_decision", "appointment_decision_agent",
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+def _appointment_booked_node(state: ChatState) -> dict:
+    """The frontend sends this immediately after a successful booking via
+    the dedicated /appointments/book endpoint — purely a chat-log
+    notification, instant ack, no LLM call."""
+    message = state["message"]
+    match = re.search(r"\{.*\}", message, re.DOTALL)
+    try:
+        data = json.loads(match.group(0)) if match else {}
+    except Exception:
+        data = {}
+
+    reply = "Your appointment is confirmed! Our property verification team will be in touch beforehand."
+    return _make_node_output(
+        state, reply, "text", "general", "appointment_agent",
+        customer_profile=state.get("customer_profile"),
+        appointment_booked=True,
+        appointment_data=data,
     )
 
 
@@ -1026,6 +1161,16 @@ def _route_after_entry(state: ChatState) -> str:
     if stage == "awaiting_acquisition_type" and _detect_acquisition_type(message):
         return "set_document_requirements"
 
+    # Manual-review appointment flow — instant, no LLM. "book appointment"
+    # works from ANY stage; the yes/no/question/default detection itself
+    # only applies once we're actually mid-flow waiting for that answer.
+    if message.strip().startswith("APPOINTMENT_BOOKED:"):
+        return "appointment_booked"
+    if lower == "book appointment":
+        return "appointment_decision"
+    if stage == "awaiting_appointment_decision":
+        return "appointment_decision"
+
     # 1. Short-circuit routing only for exact matches on UI button labels and property IDs
     if lower == "where is the property database located?":
         return "property_followup"
@@ -1103,11 +1248,14 @@ _graph.add_node("property_followup", _property_followup_node)
 _graph.add_node("faq", _faq_node)
 _graph.add_node("property_document_upload", _property_document_upload_node)
 _graph.add_node("property_verification", _property_verification_node)
+_graph.add_node("property_valuation", _property_valuation_node)
 _graph.add_node("risk_assessment", _risk_assessment_node)
 _graph.add_node("acquisition_type", _acquisition_type_node)
 _graph.add_node("set_document_requirements", _set_document_requirements_node)
 _graph.add_node("credit_assessment", _credit_assessment_node)
 _graph.add_node("loan_decision", _loan_decision_node)
+_graph.add_node("appointment_decision", _appointment_decision_node)
+_graph.add_node("appointment_booked", _appointment_booked_node)
 
 _graph.add_conditional_edges(
     START, _route_entry,
@@ -1136,6 +1284,8 @@ _graph.add_conditional_edges(
         "property_verification": "property_verification",
         "set_document_requirements": "set_document_requirements",
         "acquisition_type": "acquisition_type",
+        "appointment_decision": "appointment_decision",
+        "appointment_booked": "appointment_booked",
     },
 )
 
@@ -1160,11 +1310,14 @@ def _route_after_own_choice(state: ChatState) -> str:
 
 
 def _route_after_verification(state: ChatState) -> str:
-    """Proactive bot: an approved verification chains straight into risk
-    assessment in the same turn — the user doesn't have to say anything."""
+    """Proactive bot: an approved verification chains straight into
+    property valuation in the same turn — the user doesn't have to say
+    anything. Valuation itself then unconditionally chains into risk
+    assessment (see the plain edge below; valuation has no failure
+    branch, it's pure calculation)."""
     result = state.get("property_verification_result") or {}
     if result.get("verified"):
-        return "risk_assessment"
+        return "property_valuation"
     return "end"
 
 
@@ -1200,8 +1353,9 @@ _graph.add_conditional_edges(
 )
 _graph.add_conditional_edges(
     "property_verification", _route_after_verification,
-    {"risk_assessment": "risk_assessment", "end": END},
+    {"property_valuation": "property_valuation", "end": END},
 )
+_graph.add_edge("property_valuation", "risk_assessment")
 _graph.add_conditional_edges(
     "risk_assessment", _route_after_risk,
     {"credit_assessment": "credit_assessment", "end": END},
@@ -1213,6 +1367,8 @@ _graph.add_conditional_edges(
 _graph.add_edge("acquisition_type", END)
 _graph.add_edge("set_document_requirements", END)
 _graph.add_edge("loan_decision", END)
+_graph.add_edge("appointment_decision", END)
+_graph.add_edge("appointment_booked", END)
 _graph.add_edge("property_document_upload", END)
 _graph.add_edge("home_loan", END)
 _graph.add_edge("explain_choice", END)

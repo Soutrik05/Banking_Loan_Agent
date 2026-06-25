@@ -77,4 +77,10 @@ def verify_property(
         "max_loan_eligible": max_loan_eligible,
         "rejection_reasons": rejection_reasons,
         "summary": summary,
+        # Registry-confirmed property details, passed through so downstream
+        # steps (e.g. the valuation agent) don't have to re-derive them.
+        "address": result.get("address") or address,
+        "area_sqft": result.get("area_sqft") or area_sqft,
+        "property_type": result.get("property_type"),
+        "registration_number": registration_number,
     }

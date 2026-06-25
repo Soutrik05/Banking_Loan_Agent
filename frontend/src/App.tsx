@@ -208,6 +208,7 @@ export default function App() {
           sessionId={sessionId}
           token={auth.token}
           customerId={auth.customerId}
+          customerPhone={(auth.profile as any)?.phone}
         />
         {auth.step === 'financial_docs' && (
           <div style={{ display: 'flex', gap: 12, padding: '0 16px 12px', flexWrap: 'wrap' }}>
@@ -252,6 +253,8 @@ export default function App() {
           profile={auth.profile as unknown as CustomerProfile | null}
           creditScore={currentCreditScore}
           creditRating={currentCreditScore.label}
+          sessionId={sessionId}
+          token={auth.token}
         />
       )}
     </div>

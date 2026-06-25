@@ -125,3 +125,19 @@ export interface OwnPropertySubmission {
   area_sqft: number;
   property_type: string;
 }
+
+/* ─── APPOINTMENTS ─── */
+
+export interface Appointment {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  session_id: string;
+  appointment_date: string;
+  appointment_time: string;
+  branch: string;
+  reason: string;
+  contact_phone?: string;
+  status: string;
+  created_at: string;
+}

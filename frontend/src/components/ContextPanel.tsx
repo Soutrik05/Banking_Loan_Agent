@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import type { CreditScore, CustomerProfile } from '../types';
+import type { CreditScore, CustomerProfile, Appointment } from '../types';
 import { CreditScoreCard } from './cards/CreditScoreCard';
+import { getAppointment } from '../services/api';
 
 interface ContextPanelProps {
   profile: CustomerProfile | null;
   creditScore: CreditScore;
   creditRating?: string;
+  sessionId: string;
+  token: string | null;
 }
 
 const LOAN_TYPE_LABELS: Record<string, string> = {
@@ -85,10 +88,77 @@ const SkeletonRow: React.FC<{ className?: string }> = ({ className = 'h-12' }) =
   <div className={`animate-pulse bg-gray-100 dark:bg-gray-800 rounded-xl ${className}`} />
 );
 
-export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore, creditRating }) => {
+const AppointmentBox: React.FC<{ appointment: Appointment }> = ({ appointment }) => (
+  <div
+    className="rounded-2xl border-l-[3px] border-emerald-500 bg-[#f0fdf4] dark:bg-emerald-500/10 p-5 shadow-sm"
+  >
+    <div className="flex items-center gap-2 mb-3">
+      <span className="text-sm">📅</span>
+      <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">
+        Upcoming Appointment
+      </p>
+    </div>
+    <div className="space-y-2 text-xs">
+      <div className="flex justify-between gap-3">
+        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Date</span>
+        <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">
+          {new Date(appointment.appointment_date).toLocaleDateString('en-GB', {
+            day: 'numeric', month: 'long', year: 'numeric',
+          })}
+        </span>
+      </div>
+      <div className="flex justify-between gap-3">
+        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Time</span>
+        <span className="font-semibold text-gray-800 dark:text-gray-100">{appointment.appointment_time}</span>
+      </div>
+      <div className="flex justify-between gap-3">
+        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Branch</span>
+        <span className="font-semibold text-gray-800 dark:text-gray-100 text-right truncate">{appointment.branch}</span>
+      </div>
+      <div className="flex justify-between gap-3">
+        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Status</span>
+        <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Confirmed
+        </span>
+      </div>
+      <div className="flex justify-between gap-3">
+        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Reason</span>
+        <span
+          className="font-semibold text-gray-800 dark:text-gray-100 text-right truncate max-w-[150px]"
+          title={appointment.reason}
+        >
+          {appointment.reason}
+        </span>
+      </div>
+    </div>
+  </div>
+);
+
+export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore, creditRating, sessionId, token }) => {
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
   const [selectedLoan, setSelectedLoan] = useState<any | null>(null);
   const [width, setWidth] = useState(288);
+  const [appointment, setAppointment] = useState<Appointment | null>(null);
+
+  useEffect(() => {
+    if (!sessionId || !token) {
+      setAppointment(null);
+      return;
+    }
+    let isMounted = true;
+    const fetchAppointment = () => {
+      getAppointment(sessionId, token)
+        .then((res: any) => { if (isMounted) setAppointment(res?.appointment ?? null); })
+        .catch(() => {});
+    };
+    fetchAppointment();
+    // Booking happens inline in the chat (AppointmentFormCard), with no
+    // direct callback into this sibling panel — poll so a freshly booked
+    // appointment shows up here without requiring a page reload, same
+    // pattern as the credit-score poll in App.tsx.
+    const interval = setInterval(fetchAppointment, 8000);
+    return () => { isMounted = false; clearInterval(interval); };
+  }, [sessionId, token]);
 
   const startResizing = React.useCallback((mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
@@ -197,6 +267,9 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore
           </div>
         )}
       </SectionCard>
+
+      {/* Upcoming Appointment — only shown once one has been booked */}
+      {appointment && <AppointmentBox appointment={appointment} />}
 
       {/* Active Loans & EMI */}
       <SectionCard title="Active Loans & EMI">

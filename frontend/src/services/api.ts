@@ -253,3 +253,27 @@ export const uploadPropertyDoc = async (
   if (!res.ok) throw new Error("Upload failed");
   return res.json();
 };
+
+/* ─── APPOINTMENTS (manual-review follow-up) ─── */
+
+export const bookAppointment = async (data: {
+  customer_id: string;
+  session_id: string;
+  appointment_date: string;
+  appointment_time: string;
+  branch: string;
+  reason: string;
+  contact_phone: string;
+  token: string;
+}) => {
+  const res = await fetch(`${BASE_URL}/appointments/book`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Booking failed');
+  return res.json();
+};
+
+export const getAppointment = (sessionId: string, token: string) =>
+  request('GET', `/appointments/${sessionId}?token=${encodeURIComponent(token)}`);
