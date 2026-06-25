@@ -72,7 +72,7 @@ def discover_account(user_id: str, customer_id: str) -> dict:
 
         # Load existing loans
         cursor.execute("""
-            SELECT loan_id, loan_type, outstanding_amount, emi, status
+            SELECT loan_id, loan_type, outstanding_amount, emi, next_emi_date, status
             FROM existing_loans
             WHERE customer_id = ?
         """, (customer_id,))
@@ -110,6 +110,8 @@ def discover_account(user_id: str, customer_id: str) -> dict:
             "existing_loans": loans,
             "total_emi": total_emi,
             "avg_balance": bc["avg_monthly_balance"],
+            "avg_monthly_balance": bc["avg_monthly_balance"],
+            "account_open_date": bc["account_open_date"],
             "customer_segment": bc["customer_segment"],
             "risk_flag": bool(bc["risk_flag"]),
             "fraud_flag": bool(bc["fraud_flag"]),

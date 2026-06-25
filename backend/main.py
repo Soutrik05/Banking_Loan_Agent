@@ -45,6 +45,7 @@ from database.conversations import (
     get_conversation_messages,
     save_message,
     update_conversation_title,
+    generate_conversation_title,
 )
 from database.document_store import upload_property_document, get_property_documents
 from services.ocr_service import extract_sale_deed_fields
@@ -269,8 +270,23 @@ def chat(req: ChatRequest):
             conversation = get_or_create_conversation(user_context["customer_id"], req.session_id)
             conversation_id = conversation["id"]
             save_message(conversation_id, "user", req.message)
-            save_message(conversation_id, "assistant", response["reply"], message_type=response.get("type"))
+            save_message(conversation_id, "assistant", response["reply"], message_type=response.get("type"), metadata=response.get("metadata"))
             response["conversation_id"] = conversation_id
+
+            # Auto-title the conversation right after its first real exchange
+            # (1 user + 1 assistant message) so the sidebar stops showing the
+            # generic "New Application" placeholder. Best-effort — must never
+            # affect the chat response itself.
+            all_messages = get_conversation_messages(conversation_id)
+            if len(all_messages) == 2:
+                import threading
+                def _bg_title():
+                    try:
+                        title = generate_conversation_title(all_messages, user_context["full_name"])
+                        update_conversation_title(conversation_id, title)
+                    except Exception as e:
+                        print(f"Title Gen Error: {e}")
+                threading.Thread(target=_bg_title, daemon=True).start()
         except Exception as e:
             print(f"SUPABASE ERROR: {e}")
     
@@ -543,24 +559,27 @@ async def property_upload_sale_deed(
     session_id: str = Form(...),
     token: str = Form(...),
     customer_id: str = Form(...),
+    doc_type: str = Form("sale_deed"),
 ):
     """
-    AI-driven Sale Deed intake for the LAP flow. Works for ANY customer's
-    ANY valid Sale Deed — OCR extracts the fields, nothing here is
-    hardcoded to a specific person or scenario.
+    AI-driven property-document intake for the LAP flow — handles Sale
+    Deed, Succession Certificate, Mutation Certificate, and Gift Deed
+    uploads alike (doc_type tells us which). Works for ANY customer's ANY
+    valid document — OCR extracts the fields, nothing here is hardcoded
+    to a specific person or scenario.
     """
     user_context = _get_user_from_token(token)
 
     file_bytes = await file.read()
     extraction = extract_sale_deed_fields(file_bytes, file.filename, customer_id)
     if not extraction["success"]:
-        return {"success": False, "message": extraction["message"]}
+        return {"success": False, "doc_type": doc_type, "message": extraction["message"]}
 
     try:
         upload_property_document(
             session_id=session_id,
             customer_id=user_context["customer_id"],
-            doc_type="sale_deed",
+            doc_type=doc_type,
             file_bytes=file_bytes,
             filename=file.filename,
         )
@@ -570,6 +589,7 @@ async def property_upload_sale_deed(
     return {
         "success": True,
         "extracted_fields": extraction["extracted_fields"],
+        "doc_type": doc_type,
         "message": extraction["message"],
         "next_step": "confirm_and_verify",
     }

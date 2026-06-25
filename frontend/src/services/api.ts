@@ -231,3 +231,25 @@ export const uploadSaleDeed = async (file: File, sessionId: string, token: strin
   if (!res.ok) throw new Error("Sale deed upload failed");
   return res.json();
 };
+
+/* ─── MULTI-DOCUMENT UPLOAD (acquisition-type-aware checklist) ─── */
+
+export const uploadPropertyDoc = async (
+  file: File,
+  docType: string,
+  sessionId: string,
+  token: string,
+  customerId: string
+) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("doc_type", docType);
+  fd.append("session_id", sessionId);
+  fd.append("token", token);
+  fd.append("customer_id", customerId);
+  const res = await fetch(`${BASE_URL}/property/upload-sale-deed`, {
+    method: "POST", body: fd
+  });
+  if (!res.ok) throw new Error("Upload failed");
+  return res.json();
+};

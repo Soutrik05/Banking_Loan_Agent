@@ -1,29 +1,163 @@
 import React, { useRef, useEffect, useState } from 'react';
 import type { Message } from '../../types';
-import { uploadSaleDeed } from '../../services/api';
+import { uploadPropertyDoc, getPropertyDocuments } from '../../services/api';
 
 interface MessageBubbleProps {
   message: Message;
 }
 
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => (
-  <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}>
-    {message.role === 'assistant' && (
-      <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] shadow-md shadow-blue-500/10 flex items-center justify-center mr-3 flex-shrink-0 mt-0.5">
-        <span className="text-white text-xs font-black">B</span>
+const LOAN_DECISION_PREFIX = 'LOAN_DECISION_CARD:';
+
+const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+  // The final loan decision is rendered as a card (see LoanDecisionCard
+  // below), not as a plain text bubble — hide the raw JSON payload.
+  if (message.content.startsWith(LOAN_DECISION_PREFIX)) return null;
+
+  return (
+    <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+      {message.role === 'assistant' && (
+        <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] shadow-md shadow-blue-500/10 flex items-center justify-center mr-3 flex-shrink-0 mt-0.5">
+          <span className="text-white text-xs font-black">B</span>
+        </div>
+      )}
+      <div
+        className={`max-w-[72%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap transition-all ${
+          message.role === 'user'
+            ? 'bg-gradient-to-tr from-[#1e3a6e] to-[#254f96] text-white rounded-tr-none shadow-md shadow-blue-900/10'
+            : 'bg-white/80 dark:bg-[#161b29]/90 border border-gray-100 dark:border-gray-800 text-gray-800 dark:text-gray-100 rounded-tl-none shadow-sm'
+        }`}
+      >
+        {message.content}
       </div>
-    )}
-    <div
-      className={`max-w-[72%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap transition-all ${
-        message.role === 'user'
-          ? 'bg-gradient-to-tr from-[#1e3a6e] to-[#254f96] text-white rounded-tr-none shadow-md shadow-blue-900/10'
-          : 'bg-white/80 dark:bg-[#161b29]/90 border border-gray-100 dark:border-gray-800 text-gray-800 dark:text-gray-100 rounded-tl-none shadow-sm'
-      }`}
-    >
-      {message.content}
     </div>
+  );
+};
+
+interface LoanDecisionCardData {
+  decision: 'approved' | 'rejected' | 'conditional';
+  customer_name: string;
+  loan_amount?: number | null;
+  interest_rate?: number | null;
+  tenure_years?: number | null;
+  monthly_emi?: number | null;
+  cibil_score?: number | null;
+  cibil_rating?: string | null;
+  property_value?: number | null;
+  conditions?: string[];
+  rejection_reasons?: string[];
+}
+
+function formatINR(n?: number | null): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return `₹${Math.round(n).toLocaleString('en-IN')}`;
+}
+
+const StatTile: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+  <div className="bg-white/70 dark:bg-black/20 rounded-xl p-3">
+    <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide">{label}</p>
+    <p className="text-sm font-extrabold text-gray-800 dark:text-gray-100 mt-0.5">{value}</p>
   </div>
 );
+
+const LoanDecisionCard: React.FC<{ data: LoanDecisionCardData }> = ({ data }) => {
+  const handleComingSoon = () => alert('Coming soon');
+
+  if (data.decision === 'rejected') {
+    return (
+      <div className="rounded-2xl border border-red-200 dark:border-red-500/30 bg-red-50/70 dark:bg-red-500/10 p-5 shadow-sm max-w-md animate-fade-in">
+        <h3 className="text-base font-extrabold text-red-700 dark:text-red-400 mb-1">❌ LOAN DECLINED</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          We're unable to approve this application at this time.
+        </p>
+        {data.rejection_reasons && data.rejection_reasons.length > 0 && (
+          <ul className="space-y-1.5 mb-4">
+            {data.rejection_reasons.map((reason, i) => (
+              <li key={i} className="text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+                <span className="mt-0.5">•</span>
+                <span>{reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button
+          onClick={handleComingSoon}
+          className="w-full bg-red-600 hover:bg-red-700 active:scale-[0.98] text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm"
+        >
+          Speak to an Advisor
+        </button>
+      </div>
+    );
+  }
+
+  if (data.decision === 'conditional') {
+    return (
+      <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/70 dark:bg-amber-500/10 p-5 shadow-sm max-w-md animate-fade-in">
+        <h3 className="text-base font-extrabold text-amber-700 dark:text-amber-400 mb-1">⚠️ CONDITIONALLY APPROVED</h3>
+        <p className="text-xs text-gray-600 dark:text-gray-300 mb-4">
+          Loan Amount: <span className="font-bold text-gray-800 dark:text-gray-100">{formatINR(data.loan_amount)}</span>
+        </p>
+        {data.conditions && data.conditions.length > 0 && (
+          <ul className="space-y-1.5 mb-4">
+            {data.conditions.map((cond, i) => (
+              <li key={i} className="text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                <span className="mt-0.5">•</span>
+                <span>{cond}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button
+          onClick={handleComingSoon}
+          className="w-full bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm"
+        >
+          Submit Additional Documents
+        </button>
+      </div>
+    );
+  }
+
+  // approved
+  return (
+    <div className="rounded-2xl border border-emerald-200 dark:border-emerald-500/30 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-500/10 dark:to-teal-500/5 p-5 shadow-sm max-w-md animate-fade-in">
+      <h3 className="text-base font-extrabold text-emerald-700 dark:text-emerald-400 mb-1">✅ LOAN APPROVED</h3>
+      <p className="text-xs text-gray-600 dark:text-gray-300 mb-4">Congratulations, {data.customer_name}!</p>
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <StatTile label="Loan Amount" value={formatINR(data.loan_amount)} />
+        <StatTile label="Interest Rate" value={data.interest_rate != null ? `${data.interest_rate}%` : '—'} />
+        <StatTile label="Tenure" value={data.tenure_years != null ? `${data.tenure_years} years` : '—'} />
+        <StatTile label="Monthly EMI" value={formatINR(data.monthly_emi)} />
+        <StatTile
+          label="CIBIL Score"
+          value={data.cibil_score != null ? `${data.cibil_score}${data.cibil_rating ? ` (${data.cibil_rating})` : ''}` : '—'}
+        />
+        <StatTile label="Property Value" value={formatINR(data.property_value)} />
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={handleComingSoon}
+          className="flex-1 bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] hover:brightness-110 active:scale-[0.98] text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm"
+        >
+          Download Sanction Letter
+        </button>
+        <button
+          onClick={handleComingSoon}
+          className="flex-1 border border-emerald-300 dark:border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 active:scale-[0.98] text-xs font-bold py-2.5 rounded-xl transition-all"
+        >
+          Talk to RM
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const LoanDecisionCardFromMessage: React.FC<{ content: string }> = ({ content }) => {
+  try {
+    const data = JSON.parse(content.slice(LOAN_DECISION_PREFIX.length));
+    return <LoanDecisionCard data={data} />;
+  } catch {
+    return null;
+  }
+};
 
 interface ExtractedSaleDeedFields {
   registration_number?: string | null;
@@ -34,128 +168,221 @@ interface ExtractedSaleDeedFields {
   property_type?: string | null;
 }
 
+const DOCUMENT_DISPLAY_NAMES: Record<string, string> = {
+  sale_deed: 'Sale Deed',
+  succession_certificate: 'Succession / Will Certificate',
+  mutation_certificate: 'Mutation Certificate',
+  gift_deed: 'Gift Deed',
+};
+
+interface DocUploadState {
+  status: 'idle' | 'uploading' | 'done' | 'error';
+  fileName?: string;
+  errorMsg?: string;
+  extractedFields?: ExtractedSaleDeedFields;
+}
+
+const DocumentUploadRow: React.FC<{
+  docType: string;
+  state: DocUploadState;
+  onUpload: (file: File) => void;
+}> = ({ docType, state, onUpload }) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const label = DOCUMENT_DISPLAY_NAMES[docType] ?? docType;
+  const clickable = state.status !== 'uploading' && state.status !== 'done';
+
+  return (
+    <div
+      onClick={() => clickable && inputRef.current?.click()}
+      className={`border-2 border-dashed rounded-xl p-3.5 flex items-center justify-between gap-3 transition-colors ${
+        state.status === 'done'
+          ? 'border-emerald-300 dark:border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-400/5'
+          : state.status === 'error'
+            ? 'border-red-300 dark:border-red-500/50 cursor-pointer'
+            : 'border-gray-200 dark:border-gray-700 hover:border-[#1e3a6e] dark:hover:border-blue-400 cursor-pointer'
+      }`}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        hidden
+        accept=".pdf,.jpg,.jpeg,.png"
+        onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">{label}</p>
+        {state.status === 'idle' && (
+          <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">Click to upload (PDF, JPG, PNG)</p>
+        )}
+        {state.status === 'uploading' && (
+          <p className="text-[11px] text-[#1e3a6e] dark:text-blue-300 mt-0.5">Extracting details with AI...</p>
+        )}
+        {state.status === 'done' && (
+          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5 truncate">{state.fileName}</p>
+        )}
+        {state.status === 'error' && (
+          <p className="text-[11px] text-red-500 dark:text-red-400 mt-0.5">{state.errorMsg || 'Upload failed. Try again.'}</p>
+        )}
+      </div>
+      {state.status === 'uploading' ? (
+        <svg className="w-5 h-5 animate-spin text-[#1e3a6e] dark:text-blue-300 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+      ) : state.status === 'done' ? (
+        <svg className="w-5 h-5 text-emerald-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+      ) : (
+        <svg className="w-5 h-5 text-gray-400 dark:text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+        </svg>
+      )}
+    </div>
+  );
+};
+
 const SaleDeedUploadCard: React.FC<{
   sessionId: string;
   token: string | null;
   customerId: string | null;
+  requiredDocuments?: string[];
   onConfirm: (propertyDataMessage: string) => void;
-}> = ({ sessionId, token, customerId, onConfirm }) => {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<'idle' | 'uploading' | 'extracted' | 'error'>('idle');
-  const [fields, setFields] = useState<ExtractedSaleDeedFields | null>(null);
-  const [errorMsg, setErrorMsg] = useState('');
+}> = ({ sessionId, token, customerId, requiredDocuments, onConfirm }) => {
+  const docTypes = requiredDocuments && requiredDocuments.length > 0 ? requiredDocuments : ['sale_deed'];
+  const [docs, setDocs] = useState<Record<string, DocUploadState>>(() =>
+    Object.fromEntries(docTypes.map(d => [d, { status: 'idle' as const }]))
+  );
+  // Gates the whole checklist: uploads must stay disabled until the
+  // pre-populate fetch below has fully resolved. Without this gate, a
+  // slow/late-arriving "no documents yet" response (likely on a real
+  // network, e.g. Render + Supabase) can land AFTER a fast upload and
+  // stomp its freshly-extracted fields back to a bare "done, no fields"
+  // state — silently re-disabling Confirm & Proceed after it had already
+  // become enabled.
+  const [checklistLoading, setChecklistLoading] = useState(true);
 
-  const canConfirm = !!fields?.registration_number && !!fields?.owner_name;
+  // Pre-populate from documents already uploaded for this session, so
+  // coming back to a conversation mid-flow shows the correct state. Must
+  // finish (success or error) before any upload is allowed to start.
+  useEffect(() => {
+    let isMounted = true;
 
-  const handleUpload = async () => {
-    if (!file || !token) return;
-    setStatus('uploading');
-    setErrorMsg('');
+    if (!token) {
+      setChecklistLoading(false);
+      return () => { isMounted = false; };
+    }
+
+    getPropertyDocuments(sessionId, token)
+      .then((existing: any) => {
+        if (!isMounted || !Array.isArray(existing)) return;
+        setDocs(prev => {
+          const next = { ...prev };
+          for (const row of existing) {
+            if (row?.doc_type && next[row.doc_type]) {
+              next[row.doc_type] = { status: 'done', fileName: row.file_name };
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (isMounted) setChecklistLoading(false);
+      });
+
+    return () => { isMounted = false; };
+  }, [sessionId, token]);
+
+  const handleUpload = async (docType: string, file: File) => {
+    if (!token || checklistLoading) return;
+    setDocs(prev => ({ ...prev, [docType]: { status: 'uploading', fileName: file.name } }));
     try {
-      const data: any = await uploadSaleDeed(file, sessionId, token, customerId ?? '');
+      const data: any = await uploadPropertyDoc(file, docType, sessionId, token, customerId ?? '');
       if (data?.success) {
-        setFields(data.extracted_fields);
-        setStatus('extracted');
+        setDocs(prev => ({
+          ...prev,
+          [docType]: { status: 'done', fileName: file.name, extractedFields: data.extracted_fields },
+        }));
       } else {
-        setErrorMsg(data?.message || 'Could not extract details from this document.');
-        setStatus('error');
+        setDocs(prev => ({
+          ...prev,
+          [docType]: { status: 'error', errorMsg: data?.message || 'Could not extract details from this document.' },
+        }));
       }
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Upload failed.');
-      setStatus('error');
+      setDocs(prev => ({
+        ...prev,
+        [docType]: { status: 'error', errorMsg: e instanceof Error ? e.message : 'Upload failed.' },
+      }));
     }
   };
 
-  const handleConfirm = () => {
-    if (!fields || !canConfirm) return;
-    const payload = {
-      registration_number: fields.registration_number,
-      owner_name: fields.owner_name,
-      owner_pan: fields.owner_pan,
-      address: fields.address,
-      area_sqft: fields.area_sqft,
+  const allUploaded = docTypes.every(d => docs[d]?.status === 'done');
+
+  const mergedFields = docTypes.reduce<ExtractedSaleDeedFields>((merged, d) => {
+    const fields = docs[d]?.extractedFields;
+    if (!fields) return merged;
+    return {
+      registration_number: merged.registration_number ?? fields.registration_number,
+      owner_name: merged.owner_name ?? fields.owner_name,
+      owner_pan: merged.owner_pan ?? fields.owner_pan,
+      address: merged.address ?? fields.address,
+      area_sqft: merged.area_sqft ?? fields.area_sqft,
     };
-    onConfirm(`PROPERTY_DATA: ${JSON.stringify(payload)}`);
+  }, {});
+
+  const canConfirm = allUploaded && !!mergedFields.registration_number && !!mergedFields.owner_name;
+
+  const handleConfirm = () => {
+    if (!canConfirm) return;
+    onConfirm(`PROPERTY_DATA: ${JSON.stringify(mergedFields)}`);
   };
+
+  const title = docTypes.length === 1 && docTypes[0] === 'sale_deed' ? 'Upload Your Sale Deed' : 'Upload Required Documents';
 
   return (
     <div className="bg-white dark:bg-[#10141f] border border-gray-150 dark:border-gray-800 rounded-2xl p-5 shadow-sm max-w-md animate-fade-in">
-      <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-1">Upload Your Sale Deed</h3>
+      <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-1">{title}</h3>
       <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">AI will extract details automatically</p>
 
-      {status !== 'extracted' && (
-        <div
-          onClick={() => status !== 'uploading' && inputRef.current?.click()}
-          className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-colors ${
-            status === 'error'
-              ? 'border-red-300 dark:border-red-500/50'
-              : 'border-gray-200 dark:border-gray-700 hover:border-[#1e3a6e] dark:hover:border-blue-400'
-          }`}
-        >
-          <input
-            ref={inputRef}
-            type="file"
-            hidden
-            accept=".pdf,.jpg,.jpeg,.png"
-            onChange={e => e.target.files?.[0] && setFile(e.target.files[0])}
-          />
-          {status === 'uploading' ? (
-            <p className="text-xs font-semibold text-[#1e3a6e] dark:text-blue-300">Extracting details with AI...</p>
-          ) : file ? (
-            <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">{file.name}</p>
-          ) : (
-            <p className="text-xs font-medium text-gray-400 dark:text-gray-500">Click to upload (PDF, JPG, PNG)</p>
-          )}
+      {checklistLoading ? (
+        <div className="space-y-2.5">
+          {docTypes.map(docType => (
+            <div
+              key={docType}
+              className="animate-pulse h-[58px] rounded-xl bg-gray-100 dark:bg-gray-800/60 border-2 border-dashed border-gray-100 dark:border-gray-800"
+            />
+          ))}
+          <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center pt-1">Checking for existing uploads...</p>
         </div>
-      )}
-
-      {status === 'error' && (
-        <p className="text-xs text-red-500 dark:text-red-400 mt-2">{errorMsg}</p>
-      )}
-
-      {status !== 'extracted' && status !== 'uploading' && file && (
-        <button
-          onClick={handleUpload}
-          className="w-full mt-3 bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] hover:brightness-110 active:scale-[0.98] text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/10"
-        >
-          Upload &amp; Extract
-        </button>
-      )}
-
-      {status === 'extracted' && fields && (
-        <div className="space-y-3 animate-fade-in">
-          <div className="space-y-2 text-xs">
-            <div className="flex justify-between gap-3 border-b border-gray-100 dark:border-gray-800 pb-1.5">
-              <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">Registration Number</span>
-              <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">{fields.registration_number || '—'}</span>
-            </div>
-            <div className="flex justify-between gap-3 border-b border-gray-100 dark:border-gray-800 pb-1.5">
-              <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">Owner Name</span>
-              <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">{fields.owner_name || '—'}</span>
-            </div>
-            <div className="flex justify-between gap-3 border-b border-gray-100 dark:border-gray-800 pb-1.5">
-              <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">Address</span>
-              <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">{fields.address || '—'}</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">Area (sqft)</span>
-              <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">{fields.area_sqft || '—'}</span>
-            </div>
+      ) : (
+        <>
+          <div className="space-y-2.5">
+            {docTypes.map(docType => (
+              <DocumentUploadRow
+                key={docType}
+                docType={docType}
+                state={docs[docType] ?? { status: 'idle' }}
+                onUpload={file => handleUpload(docType, file)}
+              />
+            ))}
           </div>
-          {!canConfirm && (
-            <p className="text-xs text-red-500 dark:text-red-400">
+
+          {allUploaded && !canConfirm && (
+            <p className="text-xs text-red-500 dark:text-red-400 mt-3">
               Could not extract required fields. Please upload a clearer document.
             </p>
           )}
+
           <button
             onClick={handleConfirm}
             disabled={!canConfirm}
-            className="w-full bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] hover:brightness-110 active:scale-[0.98] text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+            className="w-full mt-3 bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] hover:brightness-110 active:scale-[0.98] text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
           >
             Confirm &amp; Proceed
           </button>
-        </div>
+        </>
       )}
     </div>
   );
@@ -340,15 +567,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
             </div>
           )}
 
-          {/* Sale Deed upload card — OCR extracts fields, user confirms to trigger property verification */}
+          {/* Property document checklist — OCR extracts fields per document, user confirms to trigger verification */}
           {msg.role === 'assistant' && msg.type === 'property_document_upload' && (
             <div className="pl-11 animate-fade-in">
               <SaleDeedUploadCard
                 sessionId={sessionId}
                 token={token}
                 customerId={customerId}
+                requiredDocuments={msg.metadata?.required_documents as string[] | undefined}
                 onConfirm={onWelcomeOption}
               />
+            </div>
+          )}
+
+          {/* Final loan decision — rendered as a card, raw JSON hidden by MessageBubble */}
+          {msg.role === 'assistant' && msg.content.startsWith(LOAN_DECISION_PREFIX) && (
+            <div className="pl-11 animate-fade-in">
+              <LoanDecisionCardFromMessage content={msg.content} />
             </div>
           )}
         </div>

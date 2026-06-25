@@ -53,6 +53,7 @@ export function useChat(
         type: res?.type,
         options: res?.options as any[],
         properties: res?.properties as any[],
+        metadata: res?.metadata as Record<string, unknown> | undefined,
       };
       setMessages(prev => [...prev, botMsg]);
 

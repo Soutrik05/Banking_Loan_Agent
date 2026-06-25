@@ -67,6 +67,8 @@ from agents.financial_document_agent import (
 from session_store import get_session, mark_step
 from agents.property_verification_agent import verify_property
 from agents.risk_assessment_agent import assess_risk
+from agents.credit_assessment_agent import assess_credit
+from agents.loan_decision_agent import make_loan_decision
 from prompts.router_prompt import ROUTER_SYSTEM_PROMPT, PROPERTY_QA_SYSTEM_PROMPT
 from utils.config import (
     AZURE_OPENAI_API_KEY,
@@ -95,6 +97,7 @@ class ChatState(TypedDict, total=False):
     stage: Literal[
         "new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow",
         "inventory_flow", "own_choice", "general",
+        "awaiting_acquisition_type",
         "property_document_requested", "property_verification", "risk_assessment",
         "credit_assessment",
     ]
@@ -107,6 +110,13 @@ class ChatState(TypedDict, total=False):
     property_data: Optional[dict]
     property_verification_result: Optional[dict]
     risk_assessment_result: Optional[dict]
+    credit_assessment_result: Optional[dict]
+    loan_decision_result: Optional[dict]
+
+    # "How did you acquire this property?" — determines which documents
+    # are required before the property pipeline can proceed.
+    acquisition_type: Optional[str]
+    required_documents: Optional[list]
 
     # New-customer, pre-JWT onboarding stage (KYC identity verified, financial
     # documents being collected). Kept separate from `stage` above: once
@@ -127,10 +137,11 @@ class ChatState(TypedDict, total=False):
     properties: Optional[list]
     doc_type: Optional[str]
     sources: Optional[list]
+    metadata: Optional[dict]
 
 
 def _output(message, reply, response_type, *, options=None, properties=None,
-            doc_type=None, sources=None, **extra) -> dict:
+            doc_type=None, sources=None, metadata=None, **extra) -> dict:
     return {
         "reply": reply,
         "response_type": response_type,
@@ -138,6 +149,7 @@ def _output(message, reply, response_type, *, options=None, properties=None,
         "properties": properties,
         "doc_type": doc_type,
         "sources": sources,
+        "metadata": metadata,
         "chat_history": [
             {"role": "user", "content": message},
             {"role": "assistant", "content": reply},
@@ -235,10 +247,10 @@ def resume_workflow(state: ChatState) -> dict:
 
 # Helper to construct output and merge state variables into ChatState
 def _make_node_output(state: ChatState, reply: str, response_type: str, stage: str, current_agent: str, *,
-                      options=None, properties=None, doc_type=None, sources=None,
+                      options=None, properties=None, doc_type=None, sources=None, metadata=None,
                       selected_property_id=None, shown_properties=None, **extra) -> dict:
     out = _output(state["message"], reply, response_type, options=options, properties=properties,
-                  doc_type=doc_type, sources=sources, **extra)
+                  doc_type=doc_type, sources=sources, metadata=metadata, **extra)
     
     out["stage"] = stage
     out["current_agent"] = current_agent
@@ -470,6 +482,72 @@ def _lap_node(state: ChatState) -> dict:
     )
 
 
+ACQUISITION_TYPE_PROMPT = "How did you acquire this property?"
+
+ACQUISITION_TYPE_OPTIONS = [
+    {"label": "I purchased it", "value": "purchased"},
+    {"label": "I inherited it", "value": "inherited"},
+    {"label": "It was gifted to me", "value": "gifted"},
+]
+
+# acquisition_type -> required document types
+REQUIRED_DOCS_BY_ACQUISITION = {
+    "purchased": ["sale_deed"],
+    "inherited": ["succession_certificate", "mutation_certificate"],
+    "gifted": ["gift_deed", "mutation_certificate"],
+}
+
+ACQUISITION_DOC_REPLIES = {
+    "purchased": "Please upload your Sale Deed document.",
+    "inherited": "Please upload your Succession Certificate and Mutation Certificate.",
+    "gifted": "Please upload your Gift Deed and Mutation Certificate.",
+}
+
+
+def _detect_acquisition_type(message: str) -> Optional[str]:
+    """Keyword match against the three acquisition-choice button labels.
+    Works regardless of which customer is answering — purely text-based."""
+    lower = message.lower().strip()
+    if "purchas" in lower or "bought" in lower:
+        return "purchased"
+    if "inherit" in lower:
+        return "inherited"
+    if "gift" in lower:
+        return "gifted"
+    return None
+
+
+def _acquisition_type_node(state: ChatState) -> dict:
+    """Asks how the customer acquired their property, right after they
+    choose LAP — instant, no LLM call. Required documents differ by
+    acquisition type, so this has to happen before any document upload."""
+    return _make_node_output(
+        state, ACQUISITION_TYPE_PROMPT, "acquisition_choice",
+        "awaiting_acquisition_type", "acquisition_type_agent",
+        options=ACQUISITION_TYPE_OPTIONS,
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+def _set_document_requirements_node(state: ChatState) -> dict:
+    """Detects which acquisition type the customer picked and sets the
+    document checklist accordingly — instant, no LLM call. Works the same
+    for any customer; nothing here is hardcoded to a specific person."""
+    acquisition_type = _detect_acquisition_type(state["message"]) or "purchased"
+    required_documents = REQUIRED_DOCS_BY_ACQUISITION[acquisition_type]
+    reply = ACQUISITION_DOC_REPLIES[acquisition_type]
+
+    return _make_node_output(
+        state, reply, "property_document_upload", "property_document_requested",
+        "document_requirements_agent",
+        doc_type=required_documents[0],
+        metadata={"required_documents": required_documents, "acquisition_type": acquisition_type},
+        customer_profile=state.get("customer_profile"),
+        acquisition_type=acquisition_type,
+        required_documents=required_documents,
+    )
+
+
 def _home_loan_node(state: ChatState) -> dict:
     return _make_node_output(
         state, HOME_LOAN_PROMPT, "mcq", "awaiting_tie_up_choice", "home_loan_agent",
@@ -526,10 +604,15 @@ def _property_document_upload_node(state: ChatState) -> dict:
 
 
 def _property_verification_node(state: ChatState) -> dict:
-    """Triggered when the frontend sends back the Sale Deed fields the user
-    confirmed (message contains a PROPERTY_DATA JSON payload). Verifies the
-    property against the (mock) land registry for whichever registration
-    number/owner/address came through — works for any customer's property."""
+    """Triggered when the frontend sends back the confirmed property fields
+    (message contains a PROPERTY_DATA JSON payload, regardless of which
+    acquisition-type documents produced them). Verifies the property
+    against the (mock) land registry for whichever registration
+    number/owner/address came through — works for any customer's property.
+
+    If verified, this is chained straight into _risk_assessment_node in the
+    SAME turn (see _route_after_verification below) so the user gets one
+    combined message without having to say anything else."""
     message = state["message"]
     session_id = state.get("session_id", "")
 
@@ -564,9 +647,12 @@ def _property_verification_node(state: ChatState) -> dict:
 
 
 def _risk_assessment_node(state: ChatState) -> dict:
-    """Triggered once property verification has approved the property
-    (stage == 'risk_assessment'). Pulls live risk signals for whichever
-    customer is authenticated this session — nothing hardcoded."""
+    """Reached only by being chained directly after an approved property
+    verification, in the SAME turn (see _route_after_verification) — so
+    `state["reply"]` at this point is exactly the verification summary the
+    previous node just produced, and we prepend it to build one combined
+    message. Pulls live risk signals for whichever customer is
+    authenticated this session — nothing hardcoded."""
     session_id = state.get("session_id", "")
     user_context = state.get("user_context") or {}
     customer_id = user_context.get("customer_id")
@@ -584,11 +670,75 @@ def _risk_assessment_node(state: ChatState) -> dict:
     mark_step(session_id, "risk", "completed" if result["approved"] else "failed")
 
     next_stage = "credit_assessment" if result["approved"] else "general"
+    prior_reply = state.get("reply") or ""
+    combined_reply = f"{prior_reply}\n\n{result['summary']}" if prior_reply else result["summary"]
 
     return _make_node_output(
-        state, result["summary"], "text", next_stage, "risk_assessment_agent",
+        state, combined_reply, "text", next_stage, "risk_assessment_agent",
         customer_profile=state.get("customer_profile"),
         risk_assessment_result=result,
+    )
+
+
+def _credit_assessment_node(state: ChatState) -> dict:
+    """Reached only by being chained directly after an approved risk
+    assessment, in the SAME turn (see _route_after_risk) — prepends
+    whatever combined message has built up so far. Pulls the live CIBIL
+    score and affordability for whichever customer is authenticated this
+    session — nothing hardcoded. On approval, chains straight into
+    _loan_decision_node (see _route_after_credit); on failure, this is
+    terminal and the user just sees the rejection summary."""
+    session_id = state.get("session_id", "")
+    user_context = state.get("user_context") or {}
+    customer_id = user_context.get("customer_id")
+    property_result = state.get("property_verification_result") or {}
+    max_loan = property_result.get("max_loan_eligible") or 0
+
+    if customer_id:
+        result = assess_credit(customer_id, max_loan)
+    else:
+        result = {
+            "approved": False, "cibil_score": None, "cibil_rating": "Poor",
+            "max_loan_by_income": 0, "final_loan_eligible": 0, "interest_rate": None,
+            "tenure_years": 20, "monthly_emi_estimate": 0,
+            "summary": "❌ Could not run credit assessment — missing customer information.",
+        }
+
+    mark_step(session_id, "credit", "completed" if result.get("approved") else "failed")
+
+    prior_reply = state.get("reply") or ""
+    combined_reply = f"{prior_reply}\n\n{result['summary']}" if prior_reply else result["summary"]
+
+    return _make_node_output(
+        state, combined_reply, "text", "general", "credit_assessment_agent",
+        customer_profile=state.get("customer_profile"),
+        credit_assessment_result=result,
+    )
+
+
+def _loan_decision_node(state: ChatState) -> dict:
+    """Reached only by being chained directly after an approved credit
+    assessment, in the SAME turn (see _route_after_credit). Aggregates
+    property + risk + credit into one final decision and emits the
+    LOAN_DECISION_CARD: payload the frontend renders as a card — this
+    reply intentionally does NOT prepend the prior combined text, so the
+    message content starts exactly with that prefix."""
+    session_id = state.get("session_id", "")
+    user_context = state.get("user_context") or {}
+    full_name = user_context.get("full_name") or "Customer"
+
+    property_result = state.get("property_verification_result") or {}
+    risk_result = state.get("risk_assessment_result") or {}
+    credit_result = state.get("credit_assessment_result") or {}
+
+    decision_result = make_loan_decision(property_result, risk_result, credit_result, full_name)
+
+    mark_step(session_id, "decision", "completed")
+
+    return _make_node_output(
+        state, decision_result["summary"], "text", "general", "loan_decision_agent",
+        customer_profile=state.get("customer_profile"),
+        loan_decision_result=decision_result,
     )
 
 
@@ -746,10 +896,20 @@ Guidelines:
     )
 
 
+# Stage-specific nudge appended to FAQ answers given mid-flow, so the
+# customer is reminded what we're still waiting on rather than the
+# conversation silently dropping the thread they were on.
+FAQ_STAGE_REMINDERS = {
+    "property_document_requested": "\n\n📎 Reminder: I still need your documents to proceed. Please upload when ready.",
+    "awaiting_acquisition_type": "\n\n💬 When ready, please let me know how you acquired your property.",
+    "awaiting_property_choice": "\n\n🏠 You were selecting a property — shall we continue?",
+}
+
+
 def _faq_node(state: ChatState) -> dict:
     message = state["message"]
     lower = message.lower().strip()
-    
+
     if lower == "where is the property database located?" or (
         "where" in lower and "database" in lower and ("property" in lower or "properties" in lower)
     ):
@@ -757,14 +917,15 @@ def _faq_node(state: ChatState) -> dict:
         return _output(message, reply, "text")
 
     answer, scored_docs = faq_agent(message, state.get("chat_history", []))
-    
+
     stage = state.get("stage", "general")
     active_stages = ("awaiting_property_choice", "awaiting_tie_up_choice", "inventory_flow", "lap_flow", "own_choice")
-    
+    reminder = FAQ_STAGE_REMINDERS.get(stage, "")
+
     if stage in active_stages:
         workflow_res = resume_workflow(state)
-        combined_reply = answer + "\n\n" + workflow_res["reply"]
-        
+        combined_reply = answer + "\n\n" + workflow_res["reply"] + reminder
+
         return _make_node_output(
             state, combined_reply, workflow_res["response_type"], stage, "faq_agent",
             options=workflow_res.get("options"),
@@ -777,7 +938,7 @@ def _faq_node(state: ChatState) -> dict:
         )
 
     return _make_node_output(
-        state, answer, "text", stage, "faq_agent",
+        state, answer + reminder, "text", stage, "faq_agent",
         sources=scored_docs,
         customer_profile=state.get("customer_profile")
     )
@@ -815,6 +976,25 @@ def _route_stage_label(message: str, stage: str) -> str:
         return "faq"
 
 
+INSTANT_ROUTES = {
+    "i own a property": ("lap_flow", "acquisition_type"),
+    "i want to buy a property": ("home_loan", "home_loan_choice"),  
+    "i purchased it": ("awaiting_acquisition_type", "set_document_requirements"),
+    "i inherited it": ("awaiting_acquisition_type", "set_document_requirements"),
+    "it was gifted to me": ("awaiting_acquisition_type", "set_document_requirements"),
+    "our tie-ups": ("home_loan", "tie_ups"),
+    "my own choice": ("own_choice", "own_choice"),
+}
+
+def _should_fast_route(message: str, stage: str) -> str | None:
+    key = message.strip().lower()
+    if key in INSTANT_ROUTES:
+        expected_stage, target_node = INSTANT_ROUTES[key]
+        # Allow if stage matches OR stage is close enough
+        return target_node
+    return None
+
+
 def _route_after_entry(state: ChatState) -> str:
     # First touch after login already produced the MCQ — terminal.
     if state.get("just_handled"):
@@ -822,17 +1002,29 @@ def _route_after_entry(state: ChatState) -> str:
 
     stage = state.get("stage", "general")
     message = state["message"]
+
+    # Check fast path before any LLM call
+    fast_node = _should_fast_route(message, stage)
+    if fast_node is not None:
+        return fast_node
+
     lower = message.lower().strip()
 
     # 0. Property pipeline — always wins over everything else below.
-    # The Sale Deed confirm-and-proceed card sends back the extracted
-    # fields as a registration_number-bearing JSON payload, regardless of
-    # whatever stage we're currently in.
-    if "registration_number" in message:
+    # The document confirm-and-proceed card sends back the extracted
+    # fields as a PROPERTY_DATA: registration_number-bearing JSON payload,
+    # regardless of whatever stage we're currently in. Verification and
+    # risk assessment (and credit, if risk approves) all auto-chain in the
+    # same turn from here — see _route_after_verification / _route_after_risk.
+    if message.strip().startswith("PROPERTY_DATA:") or "registration_number" in message:
         return "property_verification"
 
-    if stage == "risk_assessment":
-        return "risk_assessment"
+    # "How did you acquire this property?" answer — only steal the turn if
+    # the message actually looks like one of the three acquisition choices;
+    # otherwise let it fall through to FAQ/LLM routing below (so a genuine
+    # question asked at this point still gets answered, with a reminder).
+    if stage == "awaiting_acquisition_type" and _detect_acquisition_type(message):
+        return "set_document_requirements"
 
     # 1. Short-circuit routing only for exact matches on UI button labels and property IDs
     if lower == "where is the property database located?":
@@ -912,6 +1104,10 @@ _graph.add_node("faq", _faq_node)
 _graph.add_node("property_document_upload", _property_document_upload_node)
 _graph.add_node("property_verification", _property_verification_node)
 _graph.add_node("risk_assessment", _risk_assessment_node)
+_graph.add_node("acquisition_type", _acquisition_type_node)
+_graph.add_node("set_document_requirements", _set_document_requirements_node)
+_graph.add_node("credit_assessment", _credit_assessment_node)
+_graph.add_node("loan_decision", _loan_decision_node)
 
 _graph.add_conditional_edges(
     START, _route_entry,
@@ -930,36 +1126,94 @@ _graph.add_conditional_edges(
         "end": END,
         "lap": "lap",
         "home_loan": "home_loan",
+        "home_loan_choice": "home_loan",
         "explain_choice": "explain_choice",
         "show_inventory": "show_inventory",
+        "tie_ups": "show_inventory",
         "own_choice": "own_choice",
         "property_followup": "property_followup",
         "faq": "faq",
         "property_verification": "property_verification",
-        "risk_assessment": "risk_assessment",
+        "set_document_requirements": "set_document_requirements",
+        "acquisition_type": "acquisition_type",
     },
 )
 
 
-def _route_after_property_choice(state: ChatState) -> str:
-    """After lap_flow / own_choice sets in: if the Sale Deed hasn't been
-    confirmed yet, immediately ask for it in the same turn."""
+def _route_after_lap(state: ChatState) -> str:
+    """After choosing LAP: ask how they acquired the property before
+    requesting documents (required docs differ by acquisition type),
+    unless we're already past that (resumed mid-flow)."""
+    if state.get("property_data"):
+        return "end"
+    if state.get("acquisition_type"):
+        return "property_document_upload"
+    return "acquisition_type"
+
+
+def _route_after_own_choice(state: ChatState) -> str:
+    """Buying a new property of their own choice — no 'how did you acquire
+    it' question (they don't own it yet); go straight to document upload."""
     if not state.get("property_data"):
         return "property_document_upload"
     return "end"
 
 
+def _route_after_verification(state: ChatState) -> str:
+    """Proactive bot: an approved verification chains straight into risk
+    assessment in the same turn — the user doesn't have to say anything."""
+    result = state.get("property_verification_result") or {}
+    if result.get("verified"):
+        return "risk_assessment"
+    return "end"
+
+
+def _route_after_risk(state: ChatState) -> str:
+    """Proactive bot: an approved risk assessment chains straight into
+    credit assessment in the same turn."""
+    result = state.get("risk_assessment_result") or {}
+    if result.get("approved"):
+        return "credit_assessment"
+    return "end"
+
+
+def _route_after_credit(state: ChatState) -> str:
+    """Proactive bot: an approved credit assessment chains straight into
+    the final loan decision in the same turn."""
+    result = state.get("credit_assessment_result") or {}
+    if result.get("approved"):
+        return "loan_decision"
+    return "end"
+
+
 _graph.add_conditional_edges(
-    "lap", _route_after_property_choice,
+    "lap", _route_after_lap,
+    {
+        "acquisition_type": "acquisition_type",
+        "property_document_upload": "property_document_upload",
+        "end": END,
+    },
+)
+_graph.add_conditional_edges(
+    "own_choice", _route_after_own_choice,
     {"property_document_upload": "property_document_upload", "end": END},
 )
 _graph.add_conditional_edges(
-    "own_choice", _route_after_property_choice,
-    {"property_document_upload": "property_document_upload", "end": END},
+    "property_verification", _route_after_verification,
+    {"risk_assessment": "risk_assessment", "end": END},
 )
+_graph.add_conditional_edges(
+    "risk_assessment", _route_after_risk,
+    {"credit_assessment": "credit_assessment", "end": END},
+)
+_graph.add_conditional_edges(
+    "credit_assessment", _route_after_credit,
+    {"loan_decision": "loan_decision", "end": END},
+)
+_graph.add_edge("acquisition_type", END)
+_graph.add_edge("set_document_requirements", END)
+_graph.add_edge("loan_decision", END)
 _graph.add_edge("property_document_upload", END)
-_graph.add_edge("property_verification", END)
-_graph.add_edge("risk_assessment", END)
 _graph.add_edge("home_loan", END)
 _graph.add_edge("explain_choice", END)
 _graph.add_edge("show_inventory", END)
@@ -1008,6 +1262,7 @@ def run_chat_graph(message: str, session_id: str, user_context: Optional[dict]) 
             "properties": None,
             "doc_type": None,
             "sources": None,
+            "metadata": None,
         }
 
     config = {"configurable": {"thread_id": session_id}}
@@ -1022,4 +1277,9 @@ def run_chat_graph(message: str, session_id: str, user_context: Optional[dict]) 
         "properties": result.get("properties"),
         "doc_type": result.get("doc_type"),
         "sources": result.get("sources"),
+        "metadata": result.get("metadata"),
     }
+
+
+
+

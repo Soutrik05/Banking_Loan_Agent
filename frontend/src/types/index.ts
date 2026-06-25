@@ -27,6 +27,7 @@ export interface Message {
   type?: string;
   options?: any[];
   properties?: any[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface ApplicationHistoryItem {
@@ -68,6 +69,9 @@ export interface CustomerProfile {
   existing_loans: LoanRecord[];
   total_emi: number;
   customer_segment: string;
+  account_numbers: string[];
+  account_open_date?: string;
+  avg_monthly_balance?: number;
 }
 
 export interface LoanRecord {
@@ -76,6 +80,7 @@ export interface LoanRecord {
   outstanding_amount: number;
   emi: number;
   status: string;
+  next_emi_date?: string;
 }
 
 /* ─── KYC ─── */

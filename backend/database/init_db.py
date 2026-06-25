@@ -43,7 +43,6 @@ def create_tables(conn):
         )
     """)
 
-    # ── Bank customers table (KYC & profile) ─────────────────────────────
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bank_customers (
             customer_id         TEXT PRIMARY KEY,
@@ -66,6 +65,7 @@ def create_tables(conn):
             fraud_flag          INTEGER DEFAULT 0,
             bounced_cheques_12m INTEGER DEFAULT 0,
             avg_monthly_balance REAL,
+            account_open_date   TEXT,
             account_numbers     TEXT,
             created_at          TEXT DEFAULT (datetime('now'))
         )
@@ -106,6 +106,7 @@ def create_tables(conn):
             loan_type           TEXT,
             outstanding_amount  REAL,
             emi                 REAL,
+            next_emi_date       TEXT,
             status              TEXT DEFAULT 'active'
         )
     """)
@@ -155,8 +156,8 @@ def migrate_from_json(conn):
                      kyc_status, kyc_completed_date, monthly_income,
                      employment_type, employer_name, customer_segment,
                      relationship_manager, risk_flag, fraud_flag,
-                     bounced_cheques_12m, avg_monthly_balance, account_numbers)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     bounced_cheques_12m, avg_monthly_balance, account_open_date, account_numbers)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 bc["customer_id"], user_id, bc["full_name"],
                 bc["email"], bc["phone"], bc["date_of_birth"],
@@ -168,6 +169,7 @@ def migrate_from_json(conn):
                 1 if bc["risk_flag"] else 0,
                 1 if bc["fraud_flag"] else 0,
                 bc["bounced_cheques_12m"], bc["avg_monthly_balance"],
+                bc.get("account_open_date"),
                 json.dumps(bc.get("account_numbers", [])),
             ))
 
@@ -175,12 +177,12 @@ def migrate_from_json(conn):
             for loan in bc.get("existing_loans", []):
                 cursor.execute("""
                     INSERT OR IGNORE INTO existing_loans
-                        (loan_id, customer_id, loan_type, outstanding_amount, emi, status)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (loan_id, customer_id, loan_type, outstanding_amount, emi, next_emi_date, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     loan["loan_id"], bc["customer_id"],
                     loan["type"], loan["outstanding_amount"],
-                    loan["emi"], loan["status"],
+                    loan["emi"], loan.get("next_emi_date"), loan["status"],
                 ))
         except Exception as e:
             print(f"  ⚠️  Bank customer {user_id}: {e}")

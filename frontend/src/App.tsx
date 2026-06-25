@@ -8,8 +8,8 @@ import { FileUploader } from './components/FileUploader';
 import { useChat } from './hooks/useChat';
 import { useAuth } from './hooks/useAuth';
 import { useTheme } from './hooks/useTheme';
-import { workflowSteps, loanTypes, interestRates, creditScore } from './store/appState';
-import type { WorkflowStep, CreditScore, Message } from './types';
+import { loanTypes, interestRates, creditScore } from './store/appState';
+import type { CreditScore, CustomerProfile, Message } from './types';
 
 export default function App() {
   // Stateful, not a module-level const — "New Application" rotates this to a
@@ -27,10 +27,11 @@ export default function App() {
     logout,
   } = useAuth(sessionId);
 
-  const [currentSteps, setCurrentSteps] = useState<WorkflowStep[]>(workflowSteps);
   const [currentCreditScore, setCurrentCreditScore] = useState<CreditScore>(creditScore);
 
-  // Poll backend session status
+  // Poll backend session status — only the credit score is still relevant
+  // to the UI now that the right panel shows accounts/loans instead of the
+  // workflow timeline.
   useEffect(() => {
     if (auth.step !== 'authenticated') return;
 
@@ -39,27 +40,6 @@ export default function App() {
         const res = await fetch(`http://localhost:8000/session/status?session_id=${sessionId}`);
         if (!res.ok) return;
         const data = await res.json();
-
-        // Map steps
-        if (data.steps) {
-          setCurrentSteps(prevSteps => {
-            return prevSteps.map(step => {
-              if (data.active_step === step.id) {
-                return {
-                  ...step,
-                  status: 'active',
-                  subLabel: step.id === 'risk' ? 'Processing...' : undefined
-                };
-              }
-              const backendStatus = data.steps[step.id] || 'pending';
-              return {
-                ...step,
-                status: backendStatus as 'completed' | 'active' | 'pending',
-                subLabel: undefined
-              };
-            });
-          });
-        }
 
         // Map credit score
         if (data.credit_score !== null && data.credit_score !== undefined) {
@@ -78,7 +58,7 @@ export default function App() {
     pollStatus();
 
     // Set interval
-    const interval = setInterval(pollStatus, 3000);
+    const interval = setInterval(pollStatus, 15000);
     return () => clearInterval(interval);
   }, [auth.step, sessionId]);
 
@@ -124,15 +104,7 @@ export default function App() {
     if (auth.token) {
       // Already authenticated — stay in the chat instead of dropping back to
       // the guest "Existing Customer / Just Browsing" landing screen, and
-      // jump straight back into the property-choice step. KYC/account were
-      // already done for this customer, so only those two stay completed.
-      setCurrentSteps(prev =>
-        prev.map(step => ({
-          ...step,
-          status: step.id === 'auth' || step.id === 'account' ? 'completed' : 'pending',
-          subLabel: undefined,
-        }))
-      );
+      // jump straight back into the property-choice step.
       injectBotMessage(
         "Great! Let's start a new application. Are you looking to take a loan against a property you already own, or are you looking to buy a new property using our loan?",
         [
@@ -141,7 +113,6 @@ export default function App() {
         ]
       );
     } else {
-      setCurrentSteps(workflowSteps);
       setCurrentCreditScore(creditScore);
     }
   };
@@ -277,7 +248,11 @@ export default function App() {
 
       {/* Right context panel — only meaningful once authenticated */}
       {auth.step === 'authenticated' && (
-        <ContextPanel steps={currentSteps} creditScore={currentCreditScore} />
+        <ContextPanel
+          profile={auth.profile as unknown as CustomerProfile | null}
+          creditScore={currentCreditScore}
+          creditRating={currentCreditScore.label}
+        />
       )}
     </div>
   );

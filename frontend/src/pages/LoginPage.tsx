@@ -82,7 +82,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   /* ── STEP: choose_type ── */
   if (step === 'choose_type') {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8f9fb' }}>
+      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={card}>
           <Header title="Welcome to National Bank" subtitle="Let's get your loan started" />
           <ErrorBanner />
@@ -108,7 +108,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   /* ── STEP: existing_password ── */
   if (step === 'existing_password') {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8f9fb' }}>
+      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={card}>
           <Header title="Welcome back" subtitle="Sign in to continue your loan application" />
           <ErrorBanner />
@@ -152,7 +152,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   /* ── STEP: existing_otp ── */
   if (step === 'existing_otp') {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8f9fb' }}>
+      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={card}>
           <Header title="Verify it's you" subtitle="Enter the OTP sent to your registered mobile" />
           <ErrorBanner />
@@ -187,7 +187,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   /* ── STEP: new_phone ── */
   if (step === 'new_phone') {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8f9fb' }}>
+      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={card}>
           <Header title="Let's get started" subtitle="Enter your mobile number to begin" />
           <ErrorBanner />
@@ -227,7 +227,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   /* ── STEP: new_otp ── */
   if (step === 'new_otp') {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8f9fb' }}>
+      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={card}>
           <Header title="Verify your number" subtitle={`OTP sent to ${phone}`} />
           <ErrorBanner />
@@ -262,12 +262,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 if (step === 'kyc') {
   return (
     <div
+      className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]"
       style={{
         minHeight: '100vh',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center',
-        background: '#f8f9fb'
+        justifyContent: 'center'
       }}
     >
       <div style={card}>

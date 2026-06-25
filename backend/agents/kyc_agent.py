@@ -132,9 +132,9 @@ def complete_registration(
                 pan_number, aadhaar_number, kyc_status, kyc_completed_date,
                 monthly_income, employment_type, employer_name,
                 customer_segment, risk_flag, fraud_flag,
-                bounced_cheques_12m, avg_monthly_balance
+                bounced_cheques_12m, avg_monthly_balance, account_open_date
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'verified', datetime('now'),
-                      ?, 'salaried', ?, 'standard', 0, 0, 0, ?)
+                      ?, 'salaried', ?, 'standard', 0, 0, 0, ?, date('now'))
         """, (
             customer_id, user_id, verified_name, phone, verified_dob, verified_address,
             pan_number, aadhaar_number, monthly_income, employer_name,

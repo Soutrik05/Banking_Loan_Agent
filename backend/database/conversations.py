@@ -10,7 +10,21 @@ This module only powers the ChatGPT-style history sidebar.
 from datetime import datetime, timezone
 from typing import Optional
 
+from openai import AzureOpenAI
+
 from database.supabase_client import supabase
+from utils.config import (
+    AZURE_OPENAI_API_KEY,
+    AZURE_OPENAI_ENDPOINT,
+    AZURE_OPENAI_API_VERSION,
+    CHAT_DEPLOYMENT,
+)
+
+_title_client = AzureOpenAI(
+    api_key=AZURE_OPENAI_API_KEY,
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_version=AZURE_OPENAI_API_VERSION,
+)
 
 
 def get_or_create_conversation(customer_id: str, session_id: str) -> dict:
@@ -90,3 +104,37 @@ def save_message(
 
 def update_conversation_title(conversation_id: str, title: str):
     supabase.table("conversations").update({"title": title}).eq("id", conversation_id).execute()
+
+
+def generate_conversation_title(messages: list, customer_name: str) -> str:
+    """
+    Short, descriptive sidebar title for any conversation — works for any
+    customer, any loan topic. Called once a conversation has its first
+    real exchange; on any failure, falls back to a generic per-customer
+    title rather than breaking the chat response.
+    """
+    try:
+        context = "\n".join(
+            f"{m.get('role', 'user')}: {m.get('content', '')}"
+            for m in messages[:4]
+        )
+
+        response = _title_client.chat.completions.create(
+            model=CHAT_DEPLOYMENT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Generate a SHORT 4-6 word title for this banking loan conversation. "
+                        "Examples: 'LAP Application - Ballygunge', 'Home Loan Inquiry Salt Lake', "
+                        "'Property Eligibility Check'. Return ONLY the title, nothing else."
+                    ),
+                },
+                {"role": "user", "content": context},
+            ],
+            max_tokens=20,
+        )
+        title = (response.choices[0].message.content or "").strip().strip('"')
+        return title or f"{customer_name}'s Loan Application"
+    except Exception:
+        return f"{customer_name}'s Loan Application"
