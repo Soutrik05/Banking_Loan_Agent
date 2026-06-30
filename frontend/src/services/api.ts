@@ -190,8 +190,14 @@ export interface ConversationMessageRow {
   created_at: string;
 }
 
-export const getConversations = (customerId: string) =>
-  request<ConversationSummary[]>('GET', `/conversations?customer_id=${encodeURIComponent(customerId)}`);
+// token is required — the backend ignores the customer_id query param and
+// always derives the actual customer from the verified token, so a stale
+// or mismatched customerId here can never leak another customer's history.
+export const getConversations = (customerId: string, token: string) =>
+  request<ConversationSummary[]>(
+    'GET',
+    `/conversations?customer_id=${encodeURIComponent(customerId)}&token=${encodeURIComponent(token)}`
+  );
 
 export const getConversationMessages = (conversationId: string) =>
   request<ConversationMessageRow[]>('GET', `/conversations/${conversationId}/messages`);
@@ -277,3 +283,10 @@ export const bookAppointment = async (data: {
 
 export const getAppointment = (sessionId: string, token: string) =>
   request('GET', `/appointments/${sessionId}?token=${encodeURIComponent(token)}`);
+
+export const cancelAppointment = (appointmentId: string, token: string) =>
+  request<{ success: boolean; message: string }>(
+    'POST',
+    '/appointments/cancel',
+    { appointment_id: appointmentId, token }
+  );

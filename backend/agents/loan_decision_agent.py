@@ -16,6 +16,8 @@ def make_loan_decision(
     risk_result: dict,
     credit_result: dict,
     customer_name: str,
+    flow_type: str = "lap",
+    purchase_price: float = None,
 ) -> dict:
     try:
         rejection_reasons: list = []
@@ -44,6 +46,7 @@ def make_loan_decision(
         display_card = {
             "decision": decision,
             "customer_name": customer_name,
+            "flow_type": flow_type,  # "lap" | "own_choice" | "tie_ups"
             "loan_amount": credit_result.get("final_loan_eligible"),
             "interest_rate": credit_result.get("interest_rate"),
             "tenure_years": 20,
@@ -53,6 +56,7 @@ def make_loan_decision(
             "property_value": property_result.get("government_value"),
             "conditions": conditions,
             "rejection_reasons": rejection_reasons,
+            "purchase_price": purchase_price if flow_type == "own_choice" else None,
         }
 
         return {

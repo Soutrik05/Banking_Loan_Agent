@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { CreditScore, CustomerProfile, Appointment } from '../types';
 import { CreditScoreCard } from './cards/CreditScoreCard';
-import { getAppointment } from '../services/api';
+import { getAppointment, cancelAppointment } from '../services/api';
 
 interface ContextPanelProps {
   profile: CustomerProfile | null;
@@ -9,6 +9,7 @@ interface ContextPanelProps {
   creditRating?: string;
   sessionId: string;
   token: string | null;
+  customerId?: string | null;
 }
 
 const LOAN_TYPE_LABELS: Record<string, string> = {
@@ -88,67 +89,116 @@ const SkeletonRow: React.FC<{ className?: string }> = ({ className = 'h-12' }) =
   <div className={`animate-pulse bg-gray-100 dark:bg-gray-800 rounded-xl ${className}`} />
 );
 
-const AppointmentBox: React.FC<{ appointment: Appointment }> = ({ appointment }) => (
-  <div
-    className="rounded-2xl border-l-[3px] border-emerald-500 bg-[#f0fdf4] dark:bg-emerald-500/10 p-5 shadow-sm"
-  >
-    <div className="flex items-center gap-2 mb-3">
-      <span className="text-sm">📅</span>
-      <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">
-        Upcoming Appointment
-      </p>
-    </div>
-    <div className="space-y-2 text-xs">
-      <div className="flex justify-between gap-3">
-        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Date</span>
-        <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">
-          {new Date(appointment.appointment_date).toLocaleDateString('en-GB', {
-            day: 'numeric', month: 'long', year: 'numeric',
-          })}
-        </span>
-      </div>
-      <div className="flex justify-between gap-3">
-        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Time</span>
-        <span className="font-semibold text-gray-800 dark:text-gray-100">{appointment.appointment_time}</span>
-      </div>
-      <div className="flex justify-between gap-3">
-        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Branch</span>
-        <span className="font-semibold text-gray-800 dark:text-gray-100 text-right truncate">{appointment.branch}</span>
-      </div>
-      <div className="flex justify-between gap-3">
-        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Status</span>
-        <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Confirmed
-        </span>
-      </div>
-      <div className="flex justify-between gap-3">
-        <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Reason</span>
-        <span
-          className="font-semibold text-gray-800 dark:text-gray-100 text-right truncate max-w-[150px]"
-          title={appointment.reason}
-        >
-          {appointment.reason}
-        </span>
-      </div>
-    </div>
-  </div>
-);
+const AppointmentBox: React.FC<{
+  appointment: Appointment;
+  token: string | null;
+  onCancelled: () => void;
+}> = ({ appointment, token, onCancelled }) => {
+  const [cancelling, setCancelling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore, creditRating, sessionId, token }) => {
+  const handleCancel = async () => {
+    if (!token || cancelling) return;
+    setCancelling(true);
+    setError(null);
+    try {
+      const res = await cancelAppointment(appointment.id, token);
+      if (res?.success) {
+        // Clear immediately, right here — don't wait for the next poll.
+        onCancelled();
+      } else {
+        setError(res?.message || 'Could not cancel the appointment.');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not cancel the appointment.');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  return (
+    <div
+      className="rounded-2xl border-l-[3px] border-emerald-500 bg-[#f0fdf4] dark:bg-emerald-500/10 p-5 shadow-sm"
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-sm">📅</span>
+        <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">
+          Upcoming Appointment
+        </p>
+      </div>
+      <div className="space-y-2 text-xs">
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Date</span>
+          <span className="font-semibold text-gray-800 dark:text-gray-100 text-right">
+            {new Date(appointment.appointment_date).toLocaleDateString('en-GB', {
+              day: 'numeric', month: 'long', year: 'numeric',
+            })}
+          </span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Time</span>
+          <span className="font-semibold text-gray-800 dark:text-gray-100">{appointment.appointment_time}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Branch</span>
+          <span className="font-semibold text-gray-800 dark:text-gray-100 text-right truncate">{appointment.branch}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Status</span>
+          <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Confirmed
+          </span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Reason</span>
+          <span
+            className="font-semibold text-gray-800 dark:text-gray-100 text-right truncate max-w-[150px]"
+            title={appointment.reason}
+          >
+            {appointment.reason}
+          </span>
+        </div>
+      </div>
+      {error && <p className="text-[11px] text-red-500 dark:text-red-400 mt-2">{error}</p>}
+      <button
+        onClick={handleCancel}
+        disabled={cancelling}
+        className="w-full mt-3 text-[11px] font-bold text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-500/30 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl py-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {cancelling ? 'Cancelling…' : 'Cancel Appointment'}
+      </button>
+    </div>
+  );
+};
+
+export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore, creditRating, sessionId, token, customerId }) => {
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
   const [selectedLoan, setSelectedLoan] = useState<any | null>(null);
   const [width, setWidth] = useState(288);
   const [appointment, setAppointment] = useState<Appointment | null>(null);
 
   useEffect(() => {
+    // Clear FIRST, synchronously, before fetching — a new sessionId (fresh
+    // login, or "New Application") must never keep showing the PREVIOUS
+    // session's appointment box while the new fetch is in flight, and if
+    // this session simply has no appointment, the box must stay hidden
+    // rather than showing whatever was here before.
+    setAppointment(null);
+
     if (!sessionId || !token) {
-      setAppointment(null);
       return;
     }
     let isMounted = true;
     const fetchAppointment = () => {
       getAppointment(sessionId, token)
-        .then((res: any) => { if (isMounted) setAppointment(res?.appointment ?? null); })
+        .then((res: any) => {
+          if (!isMounted) return;
+          // get_appointment() returns the most recent row for this session
+          // regardless of status — a cancelled appointment (e.g. cancelled
+          // via the chat flow) must not be displayed as if still upcoming.
+          const fetched = res?.appointment ?? null;
+          setAppointment(fetched && fetched.status !== 'cancelled' ? fetched : null);
+        })
         .catch(() => {});
     };
     fetchAppointment();
@@ -158,7 +208,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore
     // pattern as the credit-score poll in App.tsx.
     const interval = setInterval(fetchAppointment, 8000);
     return () => { isMounted = false; clearInterval(interval); };
-  }, [sessionId, token]);
+  }, [sessionId, token, customerId]);
 
   const startResizing = React.useCallback((mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
@@ -269,7 +319,13 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore
       </SectionCard>
 
       {/* Upcoming Appointment — only shown once one has been booked */}
-      {appointment && <AppointmentBox appointment={appointment} />}
+      {appointment && (
+        <AppointmentBox
+          appointment={appointment}
+          token={token}
+          onCancelled={() => setAppointment(null)}
+        />
+      )}
 
       {/* Active Loans & EMI */}
       <SectionCard title="Active Loans & EMI">

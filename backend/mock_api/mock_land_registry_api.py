@@ -173,7 +173,10 @@ def mock_land_registry_api(registration_number: str, owner_name: str,
     WB-REG-2020-000001 → invalid registry        (auto-reject)
     Any other WB-REG-* → deterministic simulation based on address
     """
-    if not all([registration_number, owner_name, owner_pan]):
+    # owner_pan is intentionally NOT required here — Flow 2B (own-choice
+    # purchase) verifies the seller's title and typically never collects
+    # the seller's PAN, only their name from the Sale Deed.
+    if not registration_number or not owner_name:
         return LandRegistryResponse(
             success=False, registration_number=registration_number or "",
             address=address or "", owner_name=None, owner_pan=None, co_owners=[],
@@ -183,7 +186,7 @@ def mock_land_registry_api(registration_number: str, owner_name: str,
             locality=None, pincode=None, legal_disputes=None, dispute_details=None,
             mortgage_status=None, mortgaged_bank=None, encumbrance_clear=None,
             registry_valid=None, government_value=None,
-            failure_reason="Missing required fields: registration_number, owner_name, owner_pan",
+            failure_reason="Missing required fields: registration_number, owner_name",
             timestamp=_now(),
         ).to_dict()
 

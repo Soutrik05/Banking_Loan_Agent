@@ -10,6 +10,15 @@ export function useConversations(token: string | null, customerId: string | null
   const lastFetchRef = useRef<number>(0);
   const fetchPromiseRef = useRef<Promise<ConversationSummary[]> | null>(null);
 
+  // Tracks the CURRENT customerId synchronously (refs update immediately,
+  // unlike state) so an in-flight fetch started for a previous customer
+  // can detect, the instant it resolves, that it's now stale and must not
+  // paint its data into the new customer's sidebar.
+  const customerIdRef = useRef(customerId);
+  useEffect(() => {
+    customerIdRef.current = customerId;
+  }, [customerId]);
+
   const fetchConversations = useCallback(async (force = false) => {
     if (!token || !customerId) {
       setConversations([]);
@@ -21,10 +30,12 @@ export function useConversations(token: string | null, customerId: string | null
       return;
     }
 
+    const requestedCustomerId = customerId;
+
     if (fetchPromiseRef.current) {
       try {
         const data = await fetchPromiseRef.current;
-        setConversations(data);
+        if (customerIdRef.current === requestedCustomerId) setConversations(data);
       } catch (err) {
         // Ignored
       }
@@ -32,19 +43,34 @@ export function useConversations(token: string | null, customerId: string | null
     }
 
     setIsLoading(true);
-    fetchPromiseRef.current = getConversations(customerId);
+    fetchPromiseRef.current = getConversations(customerId, token);
 
     try {
       const data = await fetchPromiseRef.current;
-      setConversations(data);
-      lastFetchRef.current = Date.now();
+      // The customer may have changed (or logged out) while this request
+      // was in flight — a stale response for someone else must never land.
+      if (customerIdRef.current === requestedCustomerId) {
+        setConversations(data);
+        lastFetchRef.current = Date.now();
+      }
     } catch (err) {
-      setConversations([]);
+      if (customerIdRef.current === requestedCustomerId) setConversations([]);
     } finally {
       setIsLoading(false);
       fetchPromiseRef.current = null;
     }
   }, [token, customerId]);
+
+  // Clear immediately on any customerId change (including logout -> null,
+  // or login as a different customer in the same tab) so the previous
+  // customer's list never lingers on screen while the new fetch (below) is
+  // in flight — the race against a still-resolving OLD fetch is closed by
+  // the customerIdRef check above, not by this synchronous clear alone.
+  useEffect(() => {
+    setConversations([]);
+    lastFetchRef.current = 0;
+    fetchPromiseRef.current = null;
+  }, [customerId]);
 
   useEffect(() => {
     fetchConversations();

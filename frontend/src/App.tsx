@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ContextPanel } from './components/ContextPanel';
 import { ChatWindow } from './components/chat/ChatWindow';
@@ -96,12 +96,40 @@ export default function App() {
   const { messages, isTyping, inputValue, setInputValue, sendMessage, injectBotMessage, resetChat } =
     useChat(auth.token, sessionId, promptLogin, initialMessages);
 
+  // Cross-customer session isolation: the moment a NEW customer becomes
+  // authenticated during this page's lifetime (a real login, or a
+  // re-login-as-someone-else after logout — NOT the initial page-load
+  // restore from sessionStorage, which must keep that same customer's
+  // in-progress chat intact), wipe every piece of state that could
+  // otherwise leak the previous customer's data into the new session.
+  // Conversation list (useConversations) and appointment state
+  // (ContextPanel) clear themselves via their own customerId/sessionId
+  // effects, triggered by the fresh sessionId set here.
+  const prevCustomerIdRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const newCustomerId = auth.customerId;
+    const isFreshLogin =
+      !!newCustomerId &&
+      prevCustomerIdRef.current !== undefined &&
+      prevCustomerIdRef.current !== newCustomerId;
+
+    if (isFreshLogin) {
+      setSessionId(crypto.randomUUID());
+      resetChat();
+      setInitialMessages(undefined);
+      setCurrentCreditScore(creditScore);
+    }
+
+    prevCustomerIdRef.current = newCustomerId;
+  }, [auth.customerId]);
+
   const handleNewApplication = () => {
     setSessionId(crypto.randomUUID());
     resetChat();
     setInitialMessages(undefined);
 
     if (auth.token) {
+      setCurrentCreditScore(creditScore);
       // Already authenticated — stay in the chat instead of dropping back to
       // the guest "Existing Customer / Just Browsing" landing screen, and
       // jump straight back into the property-choice step.
@@ -209,6 +237,7 @@ export default function App() {
           token={auth.token}
           customerId={auth.customerId}
           customerPhone={(auth.profile as any)?.phone}
+          onNewApplication={handleNewApplication}
         />
         {auth.step === 'financial_docs' && (
           <div style={{ display: 'flex', gap: 12, padding: '0 16px 12px', flexWrap: 'wrap' }}>
@@ -255,6 +284,7 @@ export default function App() {
           creditRating={currentCreditScore.label}
           sessionId={sessionId}
           token={auth.token}
+          customerId={auth.customerId}
         />
       )}
     </div>

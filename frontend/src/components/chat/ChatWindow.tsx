@@ -36,6 +36,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
 interface LoanDecisionCardData {
   decision: 'approved' | 'rejected' | 'conditional';
   customer_name: string;
+  flow_type?: 'lap' | 'own_choice' | 'tie_ups' | null;
   loan_amount?: number | null;
   interest_rate?: number | null;
   tenure_years?: number | null;
@@ -43,6 +44,7 @@ interface LoanDecisionCardData {
   cibil_score?: number | null;
   cibil_rating?: string | null;
   property_value?: number | null;
+  purchase_price?: number | null;
   conditions?: string[];
   rejection_reasons?: string[];
 }
@@ -130,7 +132,16 @@ const LoanDecisionCard: React.FC<{ data: LoanDecisionCardData }> = ({ data }) =>
           label="CIBIL Score"
           value={data.cibil_score != null ? `${data.cibil_score}${data.cibil_rating ? ` (${data.cibil_rating})` : ''}` : '—'}
         />
-        <StatTile label="Property Value" value={formatINR(data.property_value)} />
+        {data.flow_type === 'own_choice' ? (
+          <>
+            <StatTile label="Purchase Price" value={formatINR(data.purchase_price)} />
+            <StatTile label="Bank Valuation" value={formatINR(data.property_value)} />
+          </>
+        ) : data.flow_type === 'tie_ups' ? (
+          <StatTile label="Property Price" value={formatINR(data.property_value)} />
+        ) : (
+          <StatTile label="Property Value" value={formatINR(data.property_value)} />
+        )}
       </div>
       <div className="flex gap-2">
         <button
@@ -356,6 +367,7 @@ interface ExtractedSaleDeedFields {
   address?: string | null;
   area_sqft?: number | string | null;
   property_type?: string | null;
+  document_type?: string | null;
 }
 
 const DOCUMENT_DISPLAY_NAMES: Record<string, string> = {
@@ -363,6 +375,8 @@ const DOCUMENT_DISPLAY_NAMES: Record<string, string> = {
   succession_certificate: 'Succession / Will Certificate',
   mutation_certificate: 'Mutation Certificate',
   gift_deed: 'Gift Deed',
+  encumbrance_certificate: 'Encumbrance Certificate',
+  noc_builder: 'NOC from Builder / Society',
 };
 
 interface DocUploadState {
@@ -411,7 +425,28 @@ const DocumentUploadRow: React.FC<{
           <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5 truncate">{state.fileName}</p>
         )}
         {state.status === 'error' && (
-          <p className="text-[11px] text-red-500 dark:text-red-400 mt-0.5">{state.errorMsg || 'Upload failed. Try again.'}</p>
+          <>
+            <p className="text-[11px] text-red-500 dark:text-red-400 mt-0.5">{state.errorMsg || 'Upload failed. Try again.'}</p>
+            {state.extractedFields && Object.values(state.extractedFields).some(v => v !== null && v !== undefined && v !== '') && (
+              <div className="mt-1.5 space-y-0.5 opacity-50">
+                <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Partially extracted</p>
+                {Object.entries(state.extractedFields)
+                  .filter(([, v]) => v !== null && v !== undefined && v !== '')
+                  .map(([key, value]) => (
+                    <p key={key} className="text-[10px] text-gray-400 dark:text-gray-500">
+                      <span className="font-medium">{key.replace(/_/g, ' ')}:</span> {String(value)}
+                    </p>
+                  ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
+              className="mt-1.5 text-[11px] font-bold text-[#1e3a6e] dark:text-blue-300 underline"
+            >
+              Try Again
+            </button>
+          </>
         )}
       </div>
       {state.status === 'uploading' ? (
@@ -497,7 +532,11 @@ const SaleDeedUploadCard: React.FC<{
       } else {
         setDocs(prev => ({
           ...prev,
-          [docType]: { status: 'error', errorMsg: data?.message || 'Could not extract details from this document.' },
+          [docType]: {
+            status: 'error',
+            errorMsg: data?.message || 'Could not extract details from this document.',
+            extractedFields: data?.extracted_fields,
+          },
         }));
       }
     } catch (e) {
@@ -524,9 +563,18 @@ const SaleDeedUploadCard: React.FC<{
 
   const canConfirm = allUploaded && !!mergedFields.registration_number && !!mergedFields.owner_name;
 
+  // Per-document fields, keyed by doc type — lets the backend cross-check
+  // for discrepancies (e.g. mismatched registration numbers) across
+  // multi-document acquisition types instead of trusting the client-side
+  // merge above blindly.
+  const perDocumentFields = docTypes.reduce<Record<string, ExtractedSaleDeedFields>>((acc, d) => {
+    if (docs[d]?.extractedFields) acc[d] = docs[d].extractedFields as ExtractedSaleDeedFields;
+    return acc;
+  }, {});
+
   const handleConfirm = () => {
     if (!canConfirm) return;
-    onConfirm(`PROPERTY_DATA: ${JSON.stringify(mergedFields)}`);
+    onConfirm(`PROPERTY_DATA: ${JSON.stringify({ ...mergedFields, _documents: perDocumentFields })}`);
   };
 
   const title = docTypes.length === 1 && docTypes[0] === 'sale_deed' ? 'Upload Your Sale Deed' : 'Upload Required Documents';
@@ -664,10 +712,21 @@ interface ChatWindowProps {
   token: string | null;
   customerId: string | null;
   customerPhone?: string;
+  onNewApplication?: () => void;
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId, customerPhone }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId, customerPhone, onNewApplication }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Once a LOAN_DECISION_CARD has been rendered, the application is
+  // complete — disable older MCQ buttons so they can't re-trigger a flow
+  // that no longer makes sense. Derived from `messages` rather than
+  // imperatively tracked, so "New Application" clearing the message list
+  // (see App.tsx's handleNewApplication -> resetChat) naturally resets it.
+  const [loanDecisionMade, setLoanDecisionMade] = useState(false);
+  useEffect(() => {
+    setLoanDecisionMade(messages.some(m => m.content.startsWith(LOAN_DECISION_PREFIX)));
+  }, [messages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -749,15 +808,32 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
         return (
         <div key={msg.id} className="space-y-2">
           <MessageBubble message={msg} />
-          
+
+          {/* Loan already approved this session — hard stop from the backend.
+              Rendered as plain styled text (not a card), with a prominent
+              button that does exactly what the sidebar's New Application
+              button does. */}
+          {msg.role === 'assistant' && msg.type === 'loan_already_approved' && onNewApplication && (
+            <div className="pl-11 animate-fade-in">
+              <button
+                onClick={onNewApplication}
+                className="bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] hover:brightness-110 active:scale-[0.98] text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/10"
+              >
+                Start New Application
+              </button>
+            </div>
+          )}
+
           {/* Render options if this is an assistant message and has options */}
           {msg.role === 'assistant' && msg.options && msg.options.length > 0 && (
             <div className="pl-11 flex flex-wrap gap-2 animate-fade-in">
               {msg.options.map((opt: any) => (
                 <button
                   key={opt.id || opt.label}
-                  onClick={() => onWelcomeOption(opt.label)}
-                  className="bg-white/90 dark:bg-[#10141f] border border-gray-200 dark:border-gray-700 text-xs font-bold text-[#1e3a6e] dark:text-blue-300 px-4 py-2 rounded-xl hover:border-[#1e3a6e] dark:hover:border-blue-400 hover:bg-[#1e3a6e]/5 dark:hover:bg-blue-400/10 hover:shadow-sm active:scale-95 transition-all duration-200 shadow-sm"
+                  onClick={() => !loanDecisionMade && onWelcomeOption(opt.label)}
+                  disabled={loanDecisionMade}
+                  title={loanDecisionMade ? 'Application complete. Click New Application to start fresh.' : undefined}
+                  className={`bg-white/90 dark:bg-[#10141f] border border-gray-200 dark:border-gray-700 text-xs font-bold text-[#1e3a6e] dark:text-blue-300 px-4 py-2 rounded-xl hover:border-[#1e3a6e] dark:hover:border-blue-400 hover:bg-[#1e3a6e]/5 dark:hover:bg-blue-400/10 hover:shadow-sm active:scale-95 transition-all duration-200 shadow-sm ${loanDecisionMade ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   {opt.label}
                 </button>

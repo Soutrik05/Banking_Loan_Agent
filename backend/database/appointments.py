@@ -50,3 +50,33 @@ def get_appointment(session_id: str) -> dict | None:
         return res.data[0] if res.data else None
     except Exception:
         return None
+
+
+def get_appointment_by_id(appointment_id: str) -> dict | None:
+    """Looked up before cancelling — lets the caller verify the
+    appointment actually belongs to whoever is requesting the
+    cancellation before any mutation happens."""
+    try:
+        res = (
+            supabase.table("appointments")
+            .select("*")
+            .eq("id", appointment_id)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception:
+        return None
+
+
+def cancel_appointment(appointment_id: str) -> dict | None:
+    try:
+        res = (
+            supabase.table("appointments")
+            .update({"status": "cancelled"})
+            .eq("id", appointment_id)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception:
+        return None

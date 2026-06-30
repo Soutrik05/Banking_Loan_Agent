@@ -48,7 +48,7 @@ from database.conversations import (
     generate_conversation_title,
 )
 from database.document_store import upload_property_document, get_property_documents
-from database.appointments import create_appointment, get_appointment
+from database.appointments import create_appointment, get_appointment, cancel_appointment, get_appointment_by_id
 from services.ocr_service import extract_sale_deed_fields
 
 app = FastAPI(title="National Bank Loan Assistant API")
@@ -138,12 +138,25 @@ class AppointmentRequest(BaseModel):
     contact_phone: Optional[str] = None
     token: str
 
+class CancelAppointmentRequest(BaseModel):
+    appointment_id: str
+    token: str
+
 
 def _get_user_from_token(token: str) -> dict:
-    """Decode JWT and return payload, raises 401 if invalid."""
+    """Decode JWT and return payload, raises 401 if invalid.
+
+    verify_token() always returns a (truthy) dict, even on failure —
+    {"valid": False, "message": ...} — so the emptiness check alone never
+    actually rejected a bad/expired token. Checking payload["valid"] is
+    what makes every endpoint that wraps a token through here (chat, KYC
+    uploads, appointments, sale-deed upload) actually enforce auth instead
+    of silently passing an unusable payload through to a KeyError later.
+    """
     payload = verify_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    if not payload or not payload.get("valid"):
+        detail = (payload or {}).get("message", "Invalid or expired session")
+        raise HTTPException(status_code=401, detail=detail)
     return payload
 
 
@@ -501,9 +514,17 @@ def session_reset(session_id: str):
 # ─────────────────────────────────────────────────────────────
 
 @app.get("/conversations")
-def list_conversations(customer_id: str):
+def list_conversations(customer_id: str, token: str):
+    """
+    Returns only the authenticated caller's own conversations. The
+    customer_id query param is accepted for URL-shape compatibility but is
+    NEVER trusted — the token's own customer_id is always what's actually
+    queried, so one customer can't pull another's chat history by passing
+    a different customer_id (or a stolen/guessed one) in the query string.
+    """
+    user_context = _get_user_from_token(token)
     try:
-        return get_conversations(customer_id)
+        return get_conversations(user_context["customer_id"])
     except Exception:
         return []
 
@@ -559,7 +580,11 @@ def property_documents(session_id: str, token: str):
     if not payload.get("valid"):
         raise HTTPException(status_code=401, detail=payload.get("message", "Invalid or expired session"))
     try:
-        return get_property_documents(session_id)
+        docs = get_property_documents(session_id)
+        # Defense in depth: session_id alone isn't cryptographically tied
+        # to a customer, so only return rows whose own customer_id matches
+        # the token holder's, even if the session_id were guessed/reused.
+        return [d for d in docs if d.get("customer_id") == payload.get("customer_id")]
     except Exception:
         return []
 
@@ -640,11 +665,45 @@ def book_appointment(req: AppointmentRequest):
         return {"success": False, "message": str(e)}
 
 
+@app.post("/appointments/cancel")
+def cancel_appointment_endpoint(req: CancelAppointmentRequest):
+    """
+    Cancels an existing appointment for ANY authenticated customer — but
+    only if it actually belongs to them. The appointment is looked up by
+    id and its customer_id cross-checked against the token's BEFORE any
+    mutation, so one customer can never cancel another's appointment by
+    guessing/reusing an appointment_id.
+    """
+    user_context = _get_user_from_token(req.token)
+    try:
+        existing = get_appointment_by_id(req.appointment_id)
+        if not existing:
+            return {"success": False, "message": "Appointment not found."}
+        if existing.get("customer_id") != user_context["customer_id"]:
+            return {"success": False, "message": "This appointment does not belong to you."}
+        if existing.get("status") == "cancelled":
+            return {"success": True, "message": "Appointment is already cancelled."}
+
+        updated = cancel_appointment(req.appointment_id)
+        if not updated:
+            return {"success": False, "message": "Could not cancel the appointment. Please try again."}
+        return {"success": True, "message": "Appointment cancelled successfully."}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 @app.get("/appointments/{session_id}")
 def fetch_appointment(session_id: str, token: str):
-    _get_user_from_token(token)
+    user_context = _get_user_from_token(token)
     try:
-        return {"appointment": get_appointment(session_id)}
+        appointment = get_appointment(session_id)
+        # session_id is a client-generated UUID, not cryptographically tied
+        # to a customer — confirm the appointment actually belongs to the
+        # token holder before returning it, so a reused/guessed session_id
+        # can never leak another customer's appointment.
+        if appointment and appointment.get("customer_id") != user_context["customer_id"]:
+            return {"appointment": None}
+        return {"appointment": appointment}
     except Exception:
         return {"appointment": None}
 

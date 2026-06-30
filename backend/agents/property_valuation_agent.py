@@ -14,15 +14,24 @@ def valuate_property(
     property_type: str,
     registration_number: str,
     government_value: int,
+    ltv_ratio: float = 0.65,
+    purchase_price: int = None,
 ) -> dict:
     """
     Simulates technical valuation by bank-appointed valuer.
+
+    ltv_ratio defaults to 0.65 (LAP, against distress value) for backward
+    compatibility. Flow 2B (own-choice purchase) passes ltv_ratio=0.80 and
+    its own purchase_price, which additionally caps the loan — a bank
+    will never lend more than the LTV share of what the customer is
+    actually paying, even if its own valuation comes in higher.
 
     Returns:
     {
         "fair_market_value": int,
         "distress_value": int,
-        "max_loan_lap": int,        # 65% of distress value
+        "max_loan": int,            # ltv_ratio of distress value, capped by purchase_price if given
+        "max_loan_lap": int,        # 65% of distress value (kept for existing LAP callers/UI)
         "max_loan_home": int,       # 80% of fair market value
         "locality": str,
         "locality_rate_per_sqft": int,
@@ -54,8 +63,18 @@ def valuate_property(
     distress_value = int(fair_market_value * 0.85)
 
     # Max loan amounts
-    max_loan_lap = int(distress_value * 0.65)     # LAP: 65% of distress
+    max_loan_lap = int(distress_value * 0.65)     # LAP: 65% of distress (kept for existing UI)
     max_loan_home = int(fair_market_value * 0.80)  # Home loan: 80% of FMV
+
+    # Generalized max loan at the caller's LTV ratio — also capped by the
+    # purchase price when one is given (own-choice flow), since the bank
+    # will never lend more than the LTV share of the actual sale price.
+    max_loan_by_ltv = int(distress_value * ltv_ratio)
+    if purchase_price:
+        max_loan_by_purchase_price = int(purchase_price * ltv_ratio)
+        max_loan = min(max_loan_by_ltv, max_loan_by_purchase_price)
+    else:
+        max_loan = max_loan_by_ltv
 
     # Valuation grade based on locality rate
     if locality_rate >= 8000:
@@ -71,14 +90,17 @@ def valuate_property(
     summary = _build_valuation_summary(
         locality, locality_rate, area_sqft,
         fair_market_value, distress_value,
-        max_loan_lap, grade, grade_desc
+        max_loan, ltv_ratio, grade, grade_desc,
+        capped_by_purchase_price=bool(purchase_price),
     )
 
     return {
         "fair_market_value": fair_market_value,
         "distress_value": distress_value,
+        "max_loan": max_loan,
         "max_loan_lap": max_loan_lap,
         "max_loan_home": max_loan_home,
+        "ltv_ratio": ltv_ratio,
         "locality": locality,
         "locality_rate_per_sqft": locality_rate,
         "area_sqft": area_sqft,
@@ -89,7 +111,8 @@ def valuate_property(
     }
 
 
-def _build_valuation_summary(locality, rate, area, fmv, distress, max_loan, grade, grade_desc):
+def _build_valuation_summary(locality, rate, area, fmv, distress, max_loan, ltv_ratio, grade, grade_desc, capped_by_purchase_price=False):
+    cap_note = ", capped to the stated purchase price," if capped_by_purchase_price else ""
     return (
         f"🏠 Technical Valuation Complete\n\n"
         f"**Locality:** {locality} ({grade_desc})\n"
@@ -97,8 +120,8 @@ def _build_valuation_summary(locality, rate, area, fmv, distress, max_loan, grad
         f"**Total Area:** {area} sq.ft.\n\n"
         f"**Fair Market Value:** ₹{fmv:,}\n"
         f"**Distress Value (85%):** ₹{distress:,}\n"
-        f"**Maximum Loan Eligible (LAP):** ₹{max_loan:,}\n"
-        f"*(65% of distress value as per RBI guidelines)*\n\n"
+        f"**Maximum Loan Eligible:** ₹{max_loan:,}\n"
+        f"*({int(ltv_ratio * 100)}% of distress value{cap_note} as per RBI guidelines)*\n\n"
         f"Valuation Grade: **{grade}** — {grade_desc}\n\n"
         f"Proceeding to Risk Assessment..."
     )

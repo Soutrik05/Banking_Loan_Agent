@@ -65,7 +65,8 @@ from agents.financial_document_agent import (
     is_awaiting_documents,
 )
 from session_store import get_session, mark_step
-from agents.property_verification_agent import verify_property
+from database.appointments import get_appointment, cancel_appointment
+from agents.property_verification_agent import verify_property, verify_seller_property
 from agents.property_valuation_agent import valuate_property
 from agents.risk_assessment_agent import assess_risk
 from agents.credit_assessment_agent import assess_credit
@@ -99,13 +100,21 @@ class ChatState(TypedDict, total=False):
         "new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow",
         "inventory_flow", "own_choice", "general",
         "awaiting_acquisition_type",
+        "awaiting_own_choice_address", "awaiting_own_choice_price",
         "property_document_requested", "property_verification", "property_valuation",
         "risk_assessment", "credit_assessment",
         "awaiting_appointment_decision", "awaiting_appointment_form",
+        "awaiting_cancel_confirmation",
     ]
     shown_properties: list
     selected_property_id: Optional[str]
     just_handled: bool  # set by authed_entry/kyc every turn; True only when the node produced the terminal reply itself
+
+    # Own-choice (Flow 2B) property purchase details, collected via the
+    # instant own_choice_* nodes below — zero LLM calls.
+    own_choice_address: Optional[str]
+    own_choice_price: Optional[float]
+    flow_type: Optional[str]  # "lap" | "own_choice" | "tie_ups"
 
     # LAP property pipeline: Sale Deed fields confirmed by the user, plus the
     # results of the two agent checks that run against them.
@@ -125,6 +134,10 @@ class ChatState(TypedDict, total=False):
     # comes back as "manual_review" rather than a clean approve/reject.
     appointment_booked: Optional[bool]
     appointment_data: Optional[dict]
+
+    # Real cancellation flow for an existing appointment — the id of the
+    # appointment awaiting a yes/no confirmation to actually cancel.
+    pending_cancel_appointment_id: Optional[str]
 
     # New-customer, pre-JWT onboarding stage (KYC identity verified, financial
     # documents being collected). Kept separate from `stage` above: once
@@ -209,6 +222,14 @@ OWN_CHOICE_PROMPT = (
     "or upload any property documents you have on hand for our team to review."
 )
 
+OWN_CHOICE_ADDRESS_PROMPT = "What is the full address of the property you want to purchase?"
+OWN_CHOICE_PRICE_PROMPT = "What is the approximate purchase price? (e.g. 75 lakhs, 1.5 crore, 2 Cr)"
+OWN_CHOICE_PRICE_TOO_LOW = "Please verify — ₹{price} seems unusually low. Please re-enter the purchase price."
+OWN_CHOICE_PRICE_TOO_HIGH = "For properties above ₹10 Crore, please visit our branch for specialized assistance."
+OWN_CHOICE_PRICE_INVALID = "Sorry, I couldn't understand that price. Please enter it like '75 lakhs', '1.5 crore', or '2 Cr'."
+OWN_CHOICE_DOC_PROMPT = "Please upload these documents from the seller:"
+OWN_CHOICE_REQUIRED_DOCUMENTS = ["sale_deed", "encumbrance_certificate", "noc_builder"]
+
 # Helper to restore UI elements based on state stage
 def resume_workflow(state: ChatState) -> dict:
     stage = state.get("stage", "general")
@@ -246,6 +267,12 @@ def resume_workflow(state: ChatState) -> dict:
         res["doc_type"] = "sale_deed"
     elif stage == "own_choice":
         res["reply"] = OWN_CHOICE_PROMPT
+        res["response_type"] = "text"
+    elif stage == "awaiting_own_choice_address":
+        res["reply"] = OWN_CHOICE_ADDRESS_PROMPT
+        res["response_type"] = "text"
+    elif stage == "awaiting_own_choice_price":
+        res["reply"] = OWN_CHOICE_PRICE_PROMPT
         res["response_type"] = "text"
     else:
         res["reply"] = "How can I help you today?"
@@ -347,6 +374,26 @@ def _guest_node(state: ChatState) -> dict:
 
     answer, scored_docs = faq_agent(message, state.get("chat_history", []))
     return _output(message, answer, "text", sources=scored_docs)
+
+
+def _loan_already_approved_node(state: ChatState) -> dict:
+    """Reached via _route_entry's very first check (see above) — fires
+    instantly, before any other routing, whenever this session already has
+    an approved loan_decision_result. Deliberately uses _output() rather
+    than _make_node_output() so "stage" is left untouched in the returned
+    dict: the persisted stage stays exactly what it already was."""
+    decision_result = state.get("loan_decision_result") or {}
+    card = decision_result.get("display_card") or {}
+    reply = (
+        "You already have an approved loan application in this session.\n\n"
+        f"**Approved Amount:** ₹{card.get('loan_amount') or 0:,.0f}\n"
+        f"**Interest Rate:** {card.get('interest_rate')}%\n"
+        f"**Monthly EMI:** ₹{card.get('monthly_emi') or 0:,.0f}\n\n"
+        "Would you like to:\n"
+        "- View your approval details again\n"
+        "- Start a completely fresh application (click New Application button)"
+    )
+    return _output(state["message"], reply, "loan_already_approved")
 
 
 def _kyc_node(state: ChatState) -> dict:
@@ -582,14 +629,103 @@ def _show_inventory_node(state: ChatState) -> dict:
         state, reply, "property_list", "inventory_flow", "show_inventory_agent",
         properties=inv["properties"],
         shown_properties=inv["properties"],
+        flow_type="tie_ups",
         customer_profile=state.get("customer_profile")
     )
 
 
 def _own_choice_node(state: ChatState) -> dict:
+    """Triggered once, by the literal 'My Own Choice' button click
+    (INSTANT_ROUTES). Combines the acknowledgement and the first
+    structured question into a single reply so chat_history never gets
+    two entries for one user message, and jumps straight to
+    "awaiting_own_choice_address" — "own_choice" is never persisted as a
+    resumable stage in the normal path (see _own_choice_address_node for
+    the resume-only fallback)."""
+    combined = f"{OWN_CHOICE_PROMPT}\n\n{OWN_CHOICE_ADDRESS_PROMPT}"
     return _make_node_output(
-        state, OWN_CHOICE_PROMPT, "text", "own_choice", "own_choice_agent",
-        customer_profile=state.get("customer_profile")
+        state, combined, "text", "awaiting_own_choice_address", "own_choice_agent",
+        flow_type="own_choice",
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+def _own_choice_address_node(state: ChatState) -> dict:
+    """Resume-only fallback for a persisted stage == "own_choice" (e.g.
+    after a backend restart, since MemorySaver is in-memory). Normal flow
+    never reaches this node — _own_choice_node above already combines this
+    question into its own reply and skips straight to
+    "awaiting_own_choice_address"."""
+    return _make_node_output(
+        state, OWN_CHOICE_ADDRESS_PROMPT, "text", "awaiting_own_choice_address", "own_choice_agent",
+        flow_type="own_choice",
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+def _own_choice_price_node(state: ChatState) -> dict:
+    """Stores whatever the user typed as the address, asks for price —
+    instant, no LLM call."""
+    address = state["message"].strip()
+    return _make_node_output(
+        state, OWN_CHOICE_PRICE_PROMPT, "text", "awaiting_own_choice_price", "own_choice_agent",
+        own_choice_address=address,
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+def _parse_indian_price(text: str) -> Optional[float]:
+    """Parses '75 lakhs'/'75L', '1.5 crore'/'1.5 Cr', or a plain number
+    into an INR float. Returns None if no number is found."""
+    cleaned = text.strip().lower().replace(",", "").replace("₹", "")
+    match = re.search(r'(\d+(?:\.\d+)?)\s*(crore|cr|lakhs|lakh|l)?\b', cleaned)
+    if not match:
+        return None
+    number = float(match.group(1))
+    unit = match.group(2)
+    if unit in ("crore", "cr"):
+        return number * 1_00_00_000
+    if unit in ("lakhs", "lakh", "l"):
+        return number * 1_00_000
+    return number
+
+
+def _own_choice_price_parser_node(state: ChatState) -> dict:
+    """Parses the purchase price, validates bounds, and — once valid —
+    requests the seller-side documents. Instant, no LLM call."""
+    price = _parse_indian_price(state["message"])
+
+    if price is None:
+        return _make_node_output(
+            state, OWN_CHOICE_PRICE_INVALID, "text", "awaiting_own_choice_price", "own_choice_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    if price < 500000:
+        reply = OWN_CHOICE_PRICE_TOO_LOW.format(price=format_indian_currency(int(price)))
+        return _make_node_output(
+            state, reply, "text", "awaiting_own_choice_price", "own_choice_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    if price > 100000000:
+        return _make_node_output(
+            state, OWN_CHOICE_PRICE_TOO_HIGH, "text", "general", "own_choice_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    return _make_node_output(
+        state, OWN_CHOICE_DOC_PROMPT, "property_document_upload", "property_document_requested",
+        "own_choice_agent",
+        metadata={
+            "required_documents": OWN_CHOICE_REQUIRED_DOCUMENTS,
+            "acquisition_type": "purchase_new",
+            "flow_type": "own_choice",
+        },
+        customer_profile=state.get("customer_profile"),
+        own_choice_price=price,
+        required_documents=OWN_CHOICE_REQUIRED_DOCUMENTS,
+        acquisition_type="purchase_new",
     )
 
 
@@ -611,6 +747,49 @@ def _property_document_upload_node(state: ChatState) -> dict:
     )
 
 
+_DISCREPANCY_FIELD_LABELS = {
+    "registration_number": "registration numbers",
+    "owner_name": "owner names",
+    "address": "addresses",
+}
+
+
+def _check_document_discrepancies(documents: Optional[dict]) -> Optional[str]:
+    """Cross-checks extracted fields across multiple uploaded documents
+    (e.g. Succession Certificate vs Mutation Certificate, or Gift Deed vs
+    Mutation Certificate) and returns a user-facing discrepancy message if
+    any key field disagrees, or None if everything lines up (or there's
+    only one document, e.g. a plain Sale Deed)."""
+    if not documents or len(documents) < 2:
+        return None
+
+    for field, label in _DISCREPANCY_FIELD_LABELS.items():
+        distinct_values = {}
+        for fields in documents.values():
+            value = (fields or {}).get(field)
+            if value:
+                distinct_values.setdefault(str(value).strip().lower(), value)
+        if len(distinct_values) > 1:
+            shown = " vs ".join(str(v) for v in distinct_values.values())
+            return (
+                f"We noticed different {label} in your documents ({shown}). "
+                "Please verify and re-upload if needed, or contact support."
+            )
+    return None
+
+
+def _parse_property_data_message(message: str) -> tuple:
+    """Parses the PROPERTY_DATA JSON payload out of a confirm-and-proceed
+    message. Returns (data, None) on success or (None, error_reply) on
+    failure — shared by the LAP/multi-doc and own-choice verification
+    nodes below."""
+    match = re.search(r"\{.*\}", message, re.DOTALL)
+    try:
+        return json.loads(match.group(0) if match else message), None
+    except Exception:
+        return None, "Sorry, I couldn't read those property details. Please try uploading the document again."
+
+
 def _property_verification_node(state: ChatState) -> dict:
     """Triggered when the frontend sends back the confirmed property fields
     (message contains a PROPERTY_DATA JSON payload, regardless of which
@@ -624,13 +803,28 @@ def _property_verification_node(state: ChatState) -> dict:
     message = state["message"]
     session_id = state.get("session_id", "")
 
-    match = re.search(r"\{.*\}", message, re.DOTALL)
-    try:
-        data = json.loads(match.group(0) if match else message)
-    except Exception:
-        reply = "Sorry, I couldn't read those property details. Please try uploading the document again."
+    data, error_reply = _parse_property_data_message(message)
+    if error_reply:
         return _make_node_output(
-            state, reply, "text", "general", "property_verification_agent",
+            state, error_reply, "text", "general", "property_verification_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    # Multi-document acquisition types (inherited/gifted/own_choice) send
+    # per-document OCR fields alongside the merged ones — cross-check them
+    # before trusting the merge and proceeding to verification.
+    discrepancy = _check_document_discrepancies(data.get("_documents"))
+    if discrepancy:
+        required_documents = state.get("required_documents") or ["sale_deed"]
+        return _make_node_output(
+            state, discrepancy, "property_document_upload", "property_document_requested",
+            "property_verification_agent",
+            doc_type=required_documents[0],
+            metadata={
+                "required_documents": required_documents,
+                "acquisition_type": state.get("acquisition_type"),
+                "flow_type": state.get("flow_type"),
+            },
             customer_profile=state.get("customer_profile"),
         )
 
@@ -697,6 +891,105 @@ def _property_valuation_node(state: ChatState) -> dict:
     )
 
 
+def _own_choice_verification_node(state: ChatState) -> dict:
+    """Flow 2B (Own Choice): verifies the SELLER's ownership of the
+    property the customer wants to buy — not the customer's own ownership,
+    since they're the buyer and won't appear on the registry. Reached only
+    when flow_type == "own_choice" and the document confirm-and-proceed
+    payload comes back (see _route_after_entry's PROPERTY_DATA check).
+
+    If verified, this is chained straight into _own_choice_valuation_node
+    in the SAME turn (see _route_after_own_choice_verification), mirroring
+    how _property_verification_node chains into _property_valuation_node
+    for the LAP flow."""
+    message = state["message"]
+    session_id = state.get("session_id", "")
+
+    data, error_reply = _parse_property_data_message(message)
+    if error_reply:
+        return _make_node_output(
+            state, error_reply, "text", "general", "own_choice_verification_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    discrepancy = _check_document_discrepancies(data.get("_documents"))
+    if discrepancy:
+        required_documents = state.get("required_documents") or OWN_CHOICE_REQUIRED_DOCUMENTS
+        return _make_node_output(
+            state, discrepancy, "property_document_upload", "property_document_requested",
+            "own_choice_verification_agent",
+            doc_type=required_documents[0],
+            metadata={
+                "required_documents": required_documents,
+                "acquisition_type": "purchase_new",
+                "flow_type": "own_choice",
+            },
+            customer_profile=state.get("customer_profile"),
+        )
+
+    result = verify_seller_property(
+        registration_number=data.get("registration_number"),
+        seller_name=data.get("owner_name"),
+        address=data.get("address"),
+        area_sqft=data.get("area_sqft"),
+    )
+
+    mark_step(session_id, "property", "completed" if result["verified"] else "failed")
+
+    if result.get("status") == "manual_review":
+        reply = (
+            result["summary"]
+            + "\n\nWould you like to book an appointment with our property "
+              "verification team to resolve this?"
+        )
+        return _make_node_output(
+            state, reply, "manual_review_appointment", "awaiting_appointment_decision",
+            "own_choice_verification_agent",
+            customer_profile=state.get("customer_profile"),
+            property_data=data,
+            property_verification_result=result,
+        )
+
+    next_stage = "property_valuation" if result["verified"] else "general"
+
+    return _make_node_output(
+        state, result["summary"], "text", next_stage, "own_choice_verification_agent",
+        customer_profile=state.get("customer_profile"),
+        property_data=data,
+        property_verification_result=result,
+    )
+
+
+def _own_choice_valuation_node(state: ChatState) -> dict:
+    """Reached only by chaining directly after an approved seller
+    verification in Flow 2B (see _route_after_own_choice_verification) —
+    pure calculation, ZERO LLM calls. Uses 80% LTV (vs LAP's 65%) and caps
+    the loan by the customer-stated purchase price as well as the bank's
+    own valuation. Unconditionally chains into risk assessment next, same
+    as the LAP path (see the plain edge in the graph wiring below)."""
+    property_result = state.get("property_verification_result") or {}
+
+    result = valuate_property(
+        area_sqft=property_result.get("area_sqft") or 0,
+        address=property_result.get("address") or "",
+        property_type=property_result.get("property_type") or "residential_apartment",
+        registration_number=property_result.get("registration_number") or "",
+        government_value=property_result.get("government_value") or 0,
+        ltv_ratio=0.80,
+        purchase_price=state.get("own_choice_price"),
+    )
+
+    prior_reply = state.get("reply") or ""
+    combined_reply = f"{prior_reply}\n\n{result['summary']}" if prior_reply else result["summary"]
+
+    return _make_node_output(
+        state, combined_reply, "valuation_result", "property_valuation", "own_choice_valuation_agent",
+        metadata={"valuation_result": result},
+        customer_profile=state.get("customer_profile"),
+        valuation_result=result,
+    )
+
+
 def _risk_assessment_node(state: ChatState) -> dict:
     """Reached only by being chained directly after an approved property
     verification, in the SAME turn (see _route_after_verification) — so
@@ -744,7 +1037,10 @@ def _credit_assessment_node(state: ChatState) -> dict:
     user_context = state.get("user_context") or {}
     customer_id = user_context.get("customer_id")
     valuation_result = state.get("valuation_result") or {}
-    max_loan = valuation_result.get("max_loan_lap") or 0
+    # Unified across both LAP (65% LTV) and own-choice (80% LTV, capped by
+    # purchase price) flows — valuate_property() always populates "max_loan"
+    # at whichever ltv_ratio it was called with.
+    max_loan = valuation_result.get("max_loan") or 0
 
     if customer_id:
         result = assess_credit(customer_id, max_loan)
@@ -783,8 +1079,13 @@ def _loan_decision_node(state: ChatState) -> dict:
     property_result = state.get("property_verification_result") or {}
     risk_result = state.get("risk_assessment_result") or {}
     credit_result = state.get("credit_assessment_result") or {}
+    flow_type = state.get("flow_type") or "lap"
 
-    decision_result = make_loan_decision(property_result, risk_result, credit_result, full_name)
+    decision_result = make_loan_decision(
+        property_result, risk_result, credit_result, full_name,
+        flow_type=flow_type,
+        purchase_price=state.get("own_choice_price"),
+    )
 
     mark_step(session_id, "decision", "completed")
 
@@ -874,6 +1175,77 @@ def _appointment_booked_node(state: ChatState) -> dict:
         customer_profile=state.get("customer_profile"),
         appointment_booked=True,
         appointment_data=data,
+    )
+
+
+def _cancel_appointment_node(state: ChatState) -> dict:
+    """Triggered by 'cancel appointment' intent — detected by keyword
+    match in _route_after_entry, never left to the LLM router. Instant, no
+    LLM call. Looks up whether this session actually has an active
+    (non-cancelled) appointment before asking for confirmation, so we
+    never ask the user to confirm cancelling something that doesn't
+    exist."""
+    session_id = state.get("session_id", "")
+    appointment = get_appointment(session_id)
+
+    if not appointment or appointment.get("status") == "cancelled":
+        reply = "You don't have an active appointment to cancel."
+        return _make_node_output(
+            state, reply, "text", "general", "cancel_appointment_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    reply = (
+        f"You have an appointment on {appointment.get('appointment_date')} at "
+        f"{appointment.get('appointment_time')} ({appointment.get('branch')}). "
+        "Are you sure you want to cancel it? Please say Yes or No."
+    )
+    return _make_node_output(
+        state, reply, "text", "awaiting_cancel_confirmation", "cancel_appointment_agent",
+        customer_profile=state.get("customer_profile"),
+        pending_cancel_appointment_id=appointment.get("id"),
+    )
+
+
+def _cancel_appointment_decision_node(state: ChatState) -> dict:
+    """Instant, no LLM — yes/no confirmation for the cancellation asked by
+    _cancel_appointment_node. On 'yes' this actually calls
+    cancel_appointment() against the database (real cancellation, not just
+    a claim); on 'no' the appointment is left untouched."""
+    message_lower = state["message"].strip().lower()
+    appointment_id = state.get("pending_cancel_appointment_id")
+
+    if any(p in message_lower for p in APPOINTMENT_YES_PATTERNS):
+        if not appointment_id:
+            reply = "Sorry, I couldn't find that appointment anymore. Please try again."
+            return _make_node_output(
+                state, reply, "text", "general", "cancel_appointment_agent",
+                customer_profile=state.get("customer_profile"),
+            )
+        updated = cancel_appointment(appointment_id)
+        reply = (
+            "Your appointment has been cancelled."
+            if updated else
+            "Sorry, I couldn't cancel your appointment right now. Please try again or contact support."
+        )
+        return _make_node_output(
+            state, reply, "text", "general", "cancel_appointment_agent",
+            customer_profile=state.get("customer_profile"),
+            pending_cancel_appointment_id=None,
+        )
+
+    if any(p in message_lower for p in APPOINTMENT_NO_PATTERNS):
+        reply = "No problem — your appointment is still active."
+        return _make_node_output(
+            state, reply, "text", "general", "cancel_appointment_agent",
+            customer_profile=state.get("customer_profile"),
+            pending_cancel_appointment_id=None,
+        )
+
+    reply = "I didn't quite catch that. Would you like to cancel your appointment? Please say Yes or No."
+    return _make_node_output(
+        state, reply, "text", "awaiting_cancel_confirmation", "cancel_appointment_agent",
+        customer_profile=state.get("customer_profile"),
     )
 
 
@@ -1038,6 +1410,8 @@ FAQ_STAGE_REMINDERS = {
     "property_document_requested": "\n\n📎 Reminder: I still need your documents to proceed. Please upload when ready.",
     "awaiting_acquisition_type": "\n\n💬 When ready, please let me know how you acquired your property.",
     "awaiting_property_choice": "\n\n🏠 You were selecting a property — shall we continue?",
+    "awaiting_own_choice_address": "\n\n📍 Please share the property address to continue.",
+    "awaiting_own_choice_price": "\n\n💰 Please share the approximate purchase price to continue.",
 }
 
 
@@ -1054,7 +1428,10 @@ def _faq_node(state: ChatState) -> dict:
     answer, scored_docs = faq_agent(message, state.get("chat_history", []))
 
     stage = state.get("stage", "general")
-    active_stages = ("awaiting_property_choice", "awaiting_tie_up_choice", "inventory_flow", "lap_flow", "own_choice")
+    active_stages = (
+        "awaiting_property_choice", "awaiting_tie_up_choice", "inventory_flow", "lap_flow", "own_choice",
+        "awaiting_own_choice_address", "awaiting_own_choice_price",
+    )
     reminder = FAQ_STAGE_REMINDERS.get(stage, "")
 
     if stage in active_stages:
@@ -1084,6 +1461,15 @@ def _faq_node(state: ChatState) -> dict:
 # ---------------------------------------------------------------------------
 
 def _route_entry(state: ChatState) -> str:
+    # Hard stop, checked before ANY other logic: once this session has
+    # produced an approved loan decision, every subsequent message — no
+    # matter what the user typed or clicked — gets the same "already
+    # approved" notice instead of being routed anywhere else. New
+    # Application rotates session_id to a fresh thread with no
+    # checkpointed loan_decision_result, which is what clears this.
+    decision_result = state.get("loan_decision_result")
+    if decision_result and decision_result.get("decision") == "approved":
+        return "loan_already_approved"
     if state.get("user_context") is not None:
         return "authed"
     if is_awaiting_documents(state.get("session_id", "")):
@@ -1143,6 +1529,18 @@ def _route_after_entry(state: ChatState) -> str:
     if fast_node is not None:
         return fast_node
 
+    # Own-choice instant flow — must NEVER go through LLM router.
+    if stage == "own_choice":
+        return "own_choice_address"
+    if stage == "awaiting_own_choice_address":
+        return "own_choice_price"
+    if stage == "awaiting_own_choice_price":
+        return "own_choice_price_parser"
+
+    # Appointment cancellation confirmation — instant, no LLM.
+    if stage == "awaiting_cancel_confirmation":
+        return "cancel_appointment_decision"
+
     lower = message.lower().strip()
 
     # 0. Property pipeline — always wins over everything else below.
@@ -1152,6 +1550,8 @@ def _route_after_entry(state: ChatState) -> str:
     # risk assessment (and credit, if risk approves) all auto-chain in the
     # same turn from here — see _route_after_verification / _route_after_risk.
     if message.strip().startswith("PROPERTY_DATA:") or "registration_number" in message:
+        if state.get("flow_type") == "own_choice":
+            return "own_choice_verification"
         return "property_verification"
 
     # "How did you acquire this property?" answer — only steal the turn if
@@ -1170,6 +1570,14 @@ def _route_after_entry(state: ChatState) -> str:
         return "appointment_decision"
     if stage == "awaiting_appointment_decision":
         return "appointment_decision"
+
+    # Real appointment cancellation — instant, no LLM. Detected by keyword
+    # match rather than left for the LLM to guess at. Checked after the
+    # stage=="awaiting_appointment_decision" branch above so a "cancel"
+    # typed while confirming a NEW booking is still treated as declining
+    # that booking, not as cancelling an existing appointment.
+    if "cancel" in lower and "appointment" in lower:
+        return "cancel_appointment"
 
     # 1. Short-circuit routing only for exact matches on UI button labels and property IDs
     if lower == "where is the property database located?":
@@ -1235,6 +1643,7 @@ def _route_after_kyc(state: ChatState) -> str:
 # ---------------------------------------------------------------------------
 
 _graph = StateGraph(ChatState)
+_graph.add_node("loan_already_approved", _loan_already_approved_node)
 _graph.add_node("guest", _guest_node)
 _graph.add_node("kyc", _kyc_node)
 _graph.add_node("financial_document", _financial_document_node)
@@ -1244,11 +1653,16 @@ _graph.add_node("home_loan", _home_loan_node)
 _graph.add_node("explain_choice", _explain_choice_node)
 _graph.add_node("show_inventory", _show_inventory_node)
 _graph.add_node("own_choice", _own_choice_node)
+_graph.add_node("own_choice_address", _own_choice_address_node)
+_graph.add_node("own_choice_price", _own_choice_price_node)
+_graph.add_node("own_choice_price_parser", _own_choice_price_parser_node)
 _graph.add_node("property_followup", _property_followup_node)
 _graph.add_node("faq", _faq_node)
 _graph.add_node("property_document_upload", _property_document_upload_node)
 _graph.add_node("property_verification", _property_verification_node)
 _graph.add_node("property_valuation", _property_valuation_node)
+_graph.add_node("own_choice_verification", _own_choice_verification_node)
+_graph.add_node("own_choice_valuation", _own_choice_valuation_node)
 _graph.add_node("risk_assessment", _risk_assessment_node)
 _graph.add_node("acquisition_type", _acquisition_type_node)
 _graph.add_node("set_document_requirements", _set_document_requirements_node)
@@ -1256,11 +1670,17 @@ _graph.add_node("credit_assessment", _credit_assessment_node)
 _graph.add_node("loan_decision", _loan_decision_node)
 _graph.add_node("appointment_decision", _appointment_decision_node)
 _graph.add_node("appointment_booked", _appointment_booked_node)
+_graph.add_node("cancel_appointment", _cancel_appointment_node)
+_graph.add_node("cancel_appointment_decision", _cancel_appointment_decision_node)
 
 _graph.add_conditional_edges(
     START, _route_entry,
-    {"guest": "guest", "kyc": "kyc", "authed": "authed_entry"},
+    {
+        "guest": "guest", "kyc": "kyc", "authed": "authed_entry",
+        "loan_already_approved": "loan_already_approved",
+    },
 )
+_graph.add_edge("loan_already_approved", END)
 _graph.add_edge("guest", END)
 _graph.add_conditional_edges(
     "kyc", _route_after_kyc,
@@ -1279,13 +1699,19 @@ _graph.add_conditional_edges(
         "show_inventory": "show_inventory",
         "tie_ups": "show_inventory",
         "own_choice": "own_choice",
+        "own_choice_address": "own_choice_address",
+        "own_choice_price": "own_choice_price",
+        "own_choice_price_parser": "own_choice_price_parser",
         "property_followup": "property_followup",
         "faq": "faq",
         "property_verification": "property_verification",
+        "own_choice_verification": "own_choice_verification",
         "set_document_requirements": "set_document_requirements",
         "acquisition_type": "acquisition_type",
         "appointment_decision": "appointment_decision",
         "appointment_booked": "appointment_booked",
+        "cancel_appointment": "cancel_appointment",
+        "cancel_appointment_decision": "cancel_appointment_decision",
     },
 )
 
@@ -1301,14 +1727,6 @@ def _route_after_lap(state: ChatState) -> str:
     return "acquisition_type"
 
 
-def _route_after_own_choice(state: ChatState) -> str:
-    """Buying a new property of their own choice — no 'how did you acquire
-    it' question (they don't own it yet); go straight to document upload."""
-    if not state.get("property_data"):
-        return "property_document_upload"
-    return "end"
-
-
 def _route_after_verification(state: ChatState) -> str:
     """Proactive bot: an approved verification chains straight into
     property valuation in the same turn — the user doesn't have to say
@@ -1318,6 +1736,16 @@ def _route_after_verification(state: ChatState) -> str:
     result = state.get("property_verification_result") or {}
     if result.get("verified"):
         return "property_valuation"
+    return "end"
+
+
+def _route_after_own_choice_verification(state: ChatState) -> str:
+    """Proactive bot: an approved seller verification (Flow 2B) chains
+    straight into own-choice valuation in the same turn, mirroring
+    _route_after_verification for the LAP flow."""
+    result = state.get("property_verification_result") or {}
+    if result.get("verified"):
+        return "own_choice_valuation"
     return "end"
 
 
@@ -1347,15 +1775,20 @@ _graph.add_conditional_edges(
         "end": END,
     },
 )
-_graph.add_conditional_edges(
-    "own_choice", _route_after_own_choice,
-    {"property_document_upload": "property_document_upload", "end": END},
-)
+_graph.add_edge("own_choice", END)
+_graph.add_edge("own_choice_address", END)
+_graph.add_edge("own_choice_price", END)
+_graph.add_edge("own_choice_price_parser", END)
 _graph.add_conditional_edges(
     "property_verification", _route_after_verification,
     {"property_valuation": "property_valuation", "end": END},
 )
 _graph.add_edge("property_valuation", "risk_assessment")
+_graph.add_conditional_edges(
+    "own_choice_verification", _route_after_own_choice_verification,
+    {"own_choice_valuation": "own_choice_valuation", "end": END},
+)
+_graph.add_edge("own_choice_valuation", "risk_assessment")
 _graph.add_conditional_edges(
     "risk_assessment", _route_after_risk,
     {"credit_assessment": "credit_assessment", "end": END},
@@ -1369,6 +1802,8 @@ _graph.add_edge("set_document_requirements", END)
 _graph.add_edge("loan_decision", END)
 _graph.add_edge("appointment_decision", END)
 _graph.add_edge("appointment_booked", END)
+_graph.add_edge("cancel_appointment", END)
+_graph.add_edge("cancel_appointment_decision", END)
 _graph.add_edge("property_document_upload", END)
 _graph.add_edge("home_loan", END)
 _graph.add_edge("explain_choice", END)
