@@ -28,6 +28,15 @@ export default function App() {
   } = useAuth(sessionId);
 
   const [currentCreditScore, setCurrentCreditScore] = useState<CreditScore>(creditScore);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMousePos({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
 
   // Poll backend session status — only the credit score is still relevant
   // to the UI now that the right panel shows accounts/loans instead of the
@@ -209,7 +218,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-[#f8f9fb] dark:bg-[#05070d] font-sans overflow-hidden">
+    <div onMouseMove={handleMouseMove} className="flex h-screen bg-[#f8f9fb] dark:bg-[#05070d] font-sans overflow-hidden" style={{ '--mouse-x': `${mousePos.x}px`, '--mouse-y': `${mousePos.y}px` } as React.CSSProperties}>
       {/* Left sidebar */}
       <Sidebar
         interestRates={interestRates}
@@ -238,6 +247,7 @@ export default function App() {
           customerId={auth.customerId}
           customerPhone={(auth.profile as any)?.phone}
           onNewApplication={handleNewApplication}
+          userName={auth.fullName}
         />
         {auth.step === 'financial_docs' && (
           <div style={{ display: 'flex', gap: 12, padding: '0 16px 12px', flexWrap: 'wrap' }}>

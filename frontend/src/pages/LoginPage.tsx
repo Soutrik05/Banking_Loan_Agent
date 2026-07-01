@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import type { AuthStep } from '../hooks/useAuth';
 
-
 interface LoginPageProps {
   step: AuthStep;
   loading: boolean;
@@ -17,21 +16,44 @@ interface LoginPageProps {
   onClose?: () => void;
 }
 
-const card: React.CSSProperties = {
-  background: 'white', borderRadius: 20, padding: 40, width: 380,
-  boxShadow: '0 4px 24px rgba(0,0,0,.08)',
-};
-const label: React.CSSProperties = {
-  fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6,
-};
-const input: React.CSSProperties = {
-  width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid #e5e7eb',
-  fontSize: 14, outline: 'none', boxSizing: 'border-box',
-};
-const primaryBtn: React.CSSProperties = {
-  width: '100%', padding: '12px', borderRadius: 12, background: '#1e3a6e',
-  color: 'white', border: 'none', fontSize: 14, fontWeight: 600, cursor: 'pointer',
-};
+// Define sub-components outside the LoginPage component function to prevent unmounting & focus loss on re-render.
+const Header: React.FC<{ title: string; subtitle: string }> = ({ title, subtitle }) => (
+  <div className="text-center mb-8 animate-fade-in">
+    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] flex items-center justify-center shadow-xl shadow-blue-500/20 mx-auto mb-4 hover:rotate-6 hover:scale-105 transition-transform duration-300">
+      <svg className="w-7 h-7 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 22h18M6 18V9M10 18V9M14 18V9M18 18V9M12 2L2 7h20L12 2z" />
+      </svg>
+    </div>
+    <h1 className="text-xl font-bold text-gray-900 dark:text-gray-50 tracking-tight">{title}</h1>
+    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5 font-medium">{subtitle}</p>
+  </div>
+);
+
+const ErrorBanner: React.FC<{ error: string | null }> = ({ error }) =>
+  error ? (
+    <div className="bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 dark:border-red-500/10 text-red-600 dark:text-red-400 text-xs rounded-xl p-3.5 mb-4 flex items-start gap-2 animate-fade-in">
+      <span className="mt-0.5">⚠️</span>
+      <p className="font-semibold leading-normal">{error}</p>
+    </div>
+  ) : null;
+
+const DemoOtpBanner: React.FC<{ demoOtp: string | null }> = ({ demoOtp }) =>
+  demoOtp ? (
+    <div className="bg-blue-500/10 dark:bg-blue-500/5 border border-blue-500/20 dark:border-blue-500/10 text-blue-600 dark:text-blue-300 text-xs rounded-xl p-3.5 mb-4 flex items-start gap-2 animate-fade-in">
+      <span className="mt-0.5">🧪</span>
+      <p className="font-semibold leading-normal">
+        Demo mode — your OTP is <strong className="font-black underline tracking-wider">{demoOtp}</strong>
+      </p>
+    </div>
+  ) : null;
+
+const CardWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422] min-h-screen flex items-center justify-center p-4">
+    <div className="bg-white/90 dark:bg-[#0c101d]/85 backdrop-blur-xl border border-gray-200/50 dark:border-gray-800/80 shadow-2xl rounded-3xl p-8 w-full max-w-[390px] transition-all duration-300 animate-slide-up">
+      {children}
+    </div>
+  </div>
+);
 
 export const LoginPage: React.FC<LoginPageProps> = ({
   step,
@@ -55,71 +77,63 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [aadhaar, setAadhaar] = useState('');
   const [kycError, setKycError] = useState('');
 
-  const Header = ({ title, subtitle }: { title: string; subtitle: string }) => (
-    <div style={{ textAlign: 'center', marginBottom: 32 }}>
-      <div style={{ width: 52, height: 52, borderRadius: 14, background: '#1e3a6e', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-        <span style={{ color: 'white', fontSize: 22, fontWeight: 700 }}>N</span>
-      </div>
-      <h1 style={{ fontSize: 20, fontWeight: 700, color: '#111827' }}>{title}</h1>
-      <p style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>{subtitle}</p>
-    </div>
-  );
-
-  const ErrorBanner = () =>
-    error ? (
-      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
-        <p style={{ fontSize: 13, color: '#dc2626' }}>{error}</p>
-      </div>
-    ) : null;
-
-  const DemoOtpBanner = () =>
-    demoOtp ? (
-      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
-        <p style={{ fontSize: 12, color: '#1e40af' }}>🧪 Demo mode — your OTP is <strong>{demoOtp}</strong></p>
-      </div>
-    ) : null;
-
   /* ── STEP: choose_type ── */
   if (step === 'choose_type') {
     return (
-      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={card}>
-          <Header title="Welcome to National Bank" subtitle="Let's get your loan started" />
-          <ErrorBanner />
-          <button style={{ ...primaryBtn, marginBottom: 12 }} onClick={() => setStep('existing_password')}>
+      <CardWrapper>
+        <Header title="Welcome to National Bank" subtitle="Let's get your loan started" />
+        <ErrorBanner error={error} />
+        
+        <div className="space-y-3">
+          <button 
+            className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 active:scale-[0.98] text-white font-semibold text-sm shadow-md shadow-blue-500/10 transition-all duration-200"
+            onClick={() => setStep('existing_password')}
+          >
             I'm an existing customer
           </button>
+          
           <button
-            style={{ ...primaryBtn, background: 'white', color: '#1e3a6e', border: '1px solid #1e3a6e' }}
+            className="w-full py-3.5 px-4 rounded-xl border border-gray-200 dark:border-gray-800 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900/50 font-semibold text-sm active:scale-[0.98] transition-all duration-200"
             onClick={() => setStep('new_phone')}
           >
             I'm new here
           </button>
-          {onClose && (
-            <p style={{ textAlign: 'center', fontSize: 12, color: '#9ca3af', marginTop: 20, cursor: 'pointer' }} onClick={onClose}>
-              ← Back to browsing
-            </p>
-          )}
         </div>
-      </div>
+
+        {onClose && (
+          <p 
+            className="text-center text-xs font-semibold text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 mt-6 cursor-pointer transition-colors" 
+            onClick={onClose}
+          >
+            ← Back to browsing
+          </p>
+        )}
+      </CardWrapper>
     );
   }
 
   /* ── STEP: existing_password ── */
   if (step === 'existing_password') {
     return (
-      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={card}>
-          <Header title="Welcome back" subtitle="Sign in to continue your loan application" />
-          <ErrorBanner />
-          <div style={{ marginBottom: 16 }}>
-            <label style={label}>User ID</label>
-            <input style={input} placeholder="e.g. USR001" value={userId} onChange={e => setUserId(e.target.value)} />
-          </div>
-          <div style={{ marginBottom: 20 }}>
-            <label style={label}>Password</label>
+      <CardWrapper>
+        <Header title="Welcome back" subtitle="Sign in to continue your loan application" />
+        <ErrorBanner error={error} />
+        
+        <div className="space-y-4 mb-6">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">User ID</label>
             <input 
-              style={input} 
+              className="w-full px-4 py-3 rounded-xl border border-gray-200/80 dark:border-gray-800 bg-white/50 dark:bg-gray-950/50 text-gray-900 dark:text-gray-100 text-sm outline-none transition-all duration-200 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 placeholder-gray-400 dark:placeholder-gray-600"
+              placeholder="e.g. USR001" 
+              value={userId} 
+              onChange={e => setUserId(e.target.value)} 
+            />
+          </div>
+          
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Password</label>
+            <input 
+              className="w-full px-4 py-3 rounded-xl border border-gray-200/80 dark:border-gray-800 bg-white/50 dark:bg-gray-950/50 text-gray-900 dark:text-gray-100 text-sm outline-none transition-all duration-200 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 placeholder-gray-400 dark:placeholder-gray-600"
               type="password" 
               placeholder="Enter your password" 
               value={password} 
@@ -131,220 +145,207 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               }}
             />
           </div>
-          <button
-            style={{ ...primaryBtn, opacity: loading || !userId || !password ? 0.5 : 1 }}
-            disabled={loading || !userId || !password}
-            onClick={() => existingLoginStep1(userId, password)}
-          >
-            {loading ? 'Signing in…' : 'Continue'}
-          </button>
-          <p style={{ textAlign: 'center', fontSize: 12, color: '#9ca3af', marginTop: 20 }}>
-            New customer?{' '}
-            <span style={{ color: '#1e3a6e', fontWeight: 600, cursor: 'pointer' }} onClick={() => setStep('new_phone')}>
-              Start fresh application
-            </span>
-          </p>
         </div>
-      </div>
+
+        <button
+          className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 active:scale-[0.98] text-white font-semibold text-sm shadow-md shadow-blue-500/10 transition-all duration-200 disabled:opacity-45 disabled:pointer-events-none disabled:active:scale-100"
+          disabled={loading || !userId || !password}
+          onClick={() => existingLoginStep1(userId, password)}
+        >
+          {loading ? 'Signing in…' : 'Continue'}
+        </button>
+
+        <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-6 font-medium">
+          New customer?{' '}
+          <span 
+            className="text-blue-600 dark:text-blue-400 font-bold cursor-pointer hover:underline" 
+            onClick={() => setStep('new_phone')}
+          >
+            Start fresh application
+          </span>
+        </p>
+      </CardWrapper>
     );
   }
 
   /* ── STEP: existing_otp ── */
   if (step === 'existing_otp') {
     return (
-      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={card}>
-          <Header title="Verify it's you" subtitle="Enter the OTP sent to your registered mobile" />
-          <ErrorBanner />
-          <DemoOtpBanner />
-          <div style={{ marginBottom: 24 }}>
-            <label style={label}>Enter OTP</label>
-            <input 
-              style={{ ...input, letterSpacing: '0.2em' }} 
-              placeholder="6-digit OTP" 
-              maxLength={6} 
-              value={otp} 
-              onChange={e => setOtp(e.target.value)} 
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !loading && otp.length >= 6) {
-                  existingLoginStep2(otp);
-                }
-              }}
-            />
-          </div>
-          <button
-            style={{ ...primaryBtn, opacity: loading || otp.length < 6 ? 0.5 : 1 }}
-            disabled={loading || otp.length < 6}
-            onClick={() => existingLoginStep2(otp)}
-          >
-            {loading ? 'Verifying…' : 'Sign In'}
-          </button>
+      <CardWrapper>
+        <Header title="Verify it's you" subtitle="Enter the OTP sent to your registered mobile" />
+        <ErrorBanner error={error} />
+        <DemoOtpBanner demoOtp={demoOtp} />
+        
+        <div className="mb-6">
+          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Enter OTP</label>
+          <input 
+            className="w-full px-4 py-3 rounded-xl border border-gray-200/80 dark:border-gray-800 bg-white/50 dark:bg-gray-950/50 text-gray-900 dark:text-gray-100 text-sm outline-none transition-all duration-200 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 placeholder-gray-400 dark:placeholder-gray-600 text-center tracking-[0.2em] font-bold"
+            placeholder="6-digit OTP" 
+            maxLength={6} 
+            value={otp} 
+            onChange={e => setOtp(e.target.value)} 
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !loading && otp.length >= 6) {
+                existingLoginStep2(otp);
+              }
+            }}
+          />
         </div>
-      </div>
+
+        <button
+          className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 active:scale-[0.98] text-white font-semibold text-sm shadow-md shadow-blue-500/10 transition-all duration-200 disabled:opacity-45 disabled:pointer-events-none disabled:active:scale-100"
+          disabled={loading || otp.length < 6}
+          onClick={() => existingLoginStep2(otp)}
+        >
+          {loading ? 'Verifying…' : 'Sign In'}
+        </button>
+      </CardWrapper>
     );
   }
 
   /* ── STEP: new_phone ── */
   if (step === 'new_phone') {
     return (
-      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={card}>
-          <Header title="Let's get started" subtitle="Enter your mobile number to begin" />
-          <ErrorBanner />
-          <div style={{ marginBottom: 20 }}>
-            <label style={label}>Mobile Number</label>
-            <input 
-              style={input} 
-              type="tel" 
-              placeholder="+91 98765 43210" 
-              value={phone} 
-              onChange={e => setPhone(e.target.value)} 
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !loading && phone.length >= 10) {
-                  newUserStep1(phone);
-                }
-              }}
-            />
-          </div>
-          <button
-            style={{ ...primaryBtn, opacity: loading || phone.length < 10 ? 0.5 : 1 }}
-            disabled={loading || phone.length < 10}
-            onClick={() => newUserStep1(phone)}
-          >
-            {loading ? 'Sending OTP…' : 'Send OTP'}
-          </button>
-          <p style={{ textAlign: 'center', fontSize: 12, color: '#9ca3af', marginTop: 20 }}>
-            Already a customer?{' '}
-            <span style={{ color: '#1e3a6e', fontWeight: 600, cursor: 'pointer' }} onClick={() => setStep('existing_password')}>
-              Sign in instead
-            </span>
-          </p>
+      <CardWrapper>
+        <Header title="Let's get started" subtitle="Enter your mobile number to begin" />
+        <ErrorBanner error={error} />
+        
+        <div className="mb-6">
+          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Mobile Number</label>
+          <input 
+            className="w-full px-4 py-3 rounded-xl border border-gray-200/80 dark:border-gray-800 bg-white/50 dark:bg-gray-950/50 text-gray-900 dark:text-gray-100 text-sm outline-none transition-all duration-200 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 placeholder-gray-400 dark:placeholder-gray-600"
+            type="tel" 
+            placeholder="+91 98765 43210" 
+            value={phone} 
+            onChange={e => setPhone(e.target.value)} 
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !loading && phone.length >= 10) {
+                newUserStep1(phone);
+              }
+            }}
+          />
         </div>
-      </div>
+
+        <button
+          className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 active:scale-[0.98] text-white font-semibold text-sm shadow-md shadow-blue-500/10 transition-all duration-200 disabled:opacity-45 disabled:pointer-events-none disabled:active:scale-100"
+          disabled={loading || phone.length < 10}
+          onClick={() => newUserStep1(phone)}
+        >
+          {loading ? 'Sending OTP…' : 'Send OTP'}
+        </button>
+
+        <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-6 font-medium">
+          Already a customer?{' '}
+          <span 
+            className="text-blue-600 dark:text-blue-400 font-bold cursor-pointer hover:underline" 
+            onClick={() => setStep('existing_password')}
+          >
+            Sign in instead
+          </span>
+        </p>
+      </CardWrapper>
     );
   }
 
   /* ── STEP: new_otp ── */
   if (step === 'new_otp') {
     return (
-      <div className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={card}>
-          <Header title="Verify your number" subtitle={`OTP sent to ${phone}`} />
-          <ErrorBanner />
-          <DemoOtpBanner />
-          <div style={{ marginBottom: 24 }}>
-            <label style={label}>Enter OTP</label>
-            <input 
-              style={{ ...input, letterSpacing: '0.2em' }} 
-              placeholder="6-digit OTP" 
-              maxLength={6} 
-              value={otp} 
-              onChange={e => setOtp(e.target.value)} 
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !loading && otp.length >= 6) {
-                  newUserStep2(otp);
-                }
-              }}
-            />
-          </div>
-          <button
-            style={{ ...primaryBtn, opacity: loading || otp.length < 6 ? 0.5 : 1 }}
-            disabled={loading || otp.length < 6}
-            onClick={() => newUserStep2(otp)}
-          >
-            {loading ? 'Verifying…' : 'Verify & Continue'}
-          </button>
-        </div>
-      </div>
-    );
-  }
- /* ── STEP: kyc ── */
-if (step === 'kyc') {
-  return (
-    <div
-      className="bg-gradient-to-br from-[#eef2ff] via-[#f5f3ff] to-[#e0f2fe] dark:from-[#0a0e1f] dark:via-[#111530] dark:to-[#0a1422]"
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-    >
-      <div style={card}>
-        <Header
-          title="KYC Verification"
-          subtitle="Identity verification required"
-        />
-
-        <div style={{ marginBottom: 16 }}>
-          <label style={label}>PAN Number</label>
-          <input
-            style={{
-              ...input,
-              border:
-                kycError && !pan.trim()
-                  ? '1px solid red'
-                  : '1px solid #e5e7eb'
-            }}
-            placeholder="ABCDE1234F"
-            value={pan}
-            onChange={(e) => {
-              setPan(e.target.value);
-              setKycError('');
-            }}
-          />
-        </div>
-
-        <div style={{ marginBottom: 16 }}>
-          <label style={label}>Aadhaar Number</label>
-          <input
-            style={{
-              ...input,
-              border:
-                kycError && !aadhaar.trim()
-                  ? '1px solid red'
-                  : '1px solid #e5e7eb'
-            }}
-            placeholder="123456789012"
-            value={aadhaar}
-            onChange={(e) => {
-              setAadhaar(e.target.value);
-              setKycError('');
-            }}
-            onKeyDown={async (e) => {
-              if (e.key === 'Enter' && !loading) {
-                if (!pan.trim() || !aadhaar.trim()) {
-                  setKycError('* Empty fields');
-                  return;
-                }
-                try {
-                  await kycVerifyIdentity(aadhaar, pan);
-                } catch (err) {
-                  console.error(err);
-                  setKycError('KYC Verification Failed');
-                }
+      <CardWrapper>
+        <Header title="Verify your number" subtitle={`OTP sent to ${phone}`} />
+        <ErrorBanner error={error} />
+        <DemoOtpBanner demoOtp={demoOtp} />
+        
+        <div className="mb-6">
+          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Enter OTP</label>
+          <input 
+            className="w-full px-4 py-3 rounded-xl border border-gray-200/80 dark:border-gray-800 bg-white/50 dark:bg-gray-950/50 text-gray-900 dark:text-gray-100 text-sm outline-none transition-all duration-200 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 placeholder-gray-400 dark:placeholder-gray-600 text-center tracking-[0.2em] font-bold"
+            placeholder="6-digit OTP" 
+            maxLength={6} 
+            value={otp} 
+            onChange={e => setOtp(e.target.value)} 
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !loading && otp.length >= 6) {
+                newUserStep2(otp);
               }
             }}
           />
         </div>
 
+        <button
+          className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 active:scale-[0.98] text-white font-semibold text-sm shadow-md shadow-blue-500/10 transition-all duration-200 disabled:opacity-45 disabled:pointer-events-none disabled:active:scale-100"
+          disabled={loading || otp.length < 6}
+          onClick={() => newUserStep2(otp)}
+        >
+          {loading ? 'Verifying…' : 'Verify & Continue'}
+        </button>
+      </CardWrapper>
+    );
+  }
+
+  /* ── STEP: kyc ── */
+  if (step === 'kyc') {
+    return (
+      <CardWrapper>
+        <Header title="KYC Verification" subtitle="Identity verification required" />
+
+        <div className="space-y-4 mb-6">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">PAN Number</label>
+            <input
+              className={`w-full px-4 py-3 rounded-xl border bg-white/50 dark:bg-gray-950/50 text-gray-900 dark:text-gray-100 text-sm outline-none transition-all duration-200 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 placeholder-gray-400 dark:placeholder-gray-600 ${
+                kycError && !pan.trim() 
+                  ? 'border-red-500 focus:border-red-500' 
+                  : 'border-gray-200/80 dark:border-gray-800 focus:border-blue-500 dark:focus:border-blue-400'
+              }`}
+              placeholder="ABCDE1234F"
+              value={pan}
+              onChange={(e) => {
+                setPan(e.target.value);
+                setKycError('');
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Aadhaar Number</label>
+            <input
+              className={`w-full px-4 py-3 rounded-xl border bg-white/50 dark:bg-gray-950/50 text-gray-900 dark:text-gray-100 text-sm outline-none transition-all duration-200 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 placeholder-gray-400 dark:placeholder-gray-600 ${
+                kycError && !aadhaar.trim() 
+                  ? 'border-red-500 focus:border-red-500' 
+                  : 'border-gray-200/80 dark:border-gray-800 focus:border-blue-500 dark:focus:border-blue-400'
+              }`}
+              placeholder="123456789012"
+              value={aadhaar}
+              onChange={(e) => {
+                setAadhaar(e.target.value);
+                setKycError('');
+              }}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && !loading) {
+                  if (!pan.trim() || !aadhaar.trim()) {
+                    setKycError('* Empty fields');
+                    return;
+                  }
+                  try {
+                    await kycVerifyIdentity(aadhaar, pan);
+                  } catch (err) {
+                    console.error(err);
+                    setKycError('KYC Verification Failed');
+                  }
+                }
+              }}
+            />
+          </div>
+        </div>
+
         {kycError && (
-          <p
-            style={{
-              color: 'red',
-              fontSize: '12px',
-              marginBottom: '12px'
-            }}
-          >
+          <p className="text-xs font-bold text-red-500 dark:text-red-400 mb-4 animate-fade-in">
             {kycError}
           </p>
         )}
 
         <button
-          style={{
-            ...primaryBtn,
-            opacity: loading ? 0.7 : 1
-          }}
+          className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 active:scale-[0.98] text-white font-semibold text-sm shadow-md shadow-blue-500/10 transition-all duration-200 disabled:opacity-45 disabled:pointer-events-none disabled:active:scale-100"
           disabled={loading}
           onClick={async () => {
             if (!pan.trim() || !aadhaar.trim()) {
@@ -360,12 +361,11 @@ if (step === 'kyc') {
             }
           }}
         >
-          Continue
+          {loading ? 'Verifying…' : 'Continue'}
         </button>
-      </div>
-    </div>
-  );
-}
+      </CardWrapper>
+    );
+  }
 
-    return null;
-  };
+  return null;
+};

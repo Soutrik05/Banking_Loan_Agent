@@ -30,6 +30,95 @@ function formatConversationDate(iso: string): string {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
 
+const SidebarButton: React.FC<{
+  open: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  showArrow: boolean;
+  disabled?: boolean;
+}> = ({ open, onClick, icon, label, showArrow, disabled }) => {
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [isHovered, setIsHovered] = useState(false);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMousePos({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      onMouseMove={handleMouseMove}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all text-left relative overflow-hidden group ${
+        open
+          ? 'bg-blue-500/10 text-blue-600 dark:bg-blue-400/10 dark:text-blue-300 border border-blue-500/10 dark:border-blue-400/10 shadow-sm shadow-blue-500/5'
+          : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50/50 dark:hover:bg-gray-800/40 hover:text-gray-950 dark:hover:text-gray-100 border border-transparent'
+      }`}
+    >
+      {/* Spotlight highlight overlay */}
+      <div
+        className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+        style={{
+          opacity: isHovered ? 1 : 0,
+          background: `radial-gradient(110px circle at ${mousePos.x}px ${mousePos.y}px, rgba(99, 102, 241, 0.12), transparent 80%)`,
+        }}
+      />
+
+      <span className={`z-10 transition-colors duration-200 ${open ? 'text-[#1e3a6e] dark:text-blue-300' : 'text-gray-400 dark:text-gray-500 group-hover:text-gray-650 dark:group-hover:text-gray-200'}`}>
+        {icon}
+      </span>
+      <span className="z-10 flex-1">{label}</span>
+      {showArrow && (
+        <svg
+          className={`z-10 w-3.5 h-3.5 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      )}
+    </button>
+  );
+};
+
+const NewApplicationButton: React.FC<{ onClick: () => void }> = ({ onClick }) => {
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [isHovered, setIsHovered] = useState(false);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      onMouseMove={handleMouseMove}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-tr from-[#1e3a6e] to-[#254f96] hover:shadow-lg hover:shadow-blue-500/15 active:scale-[0.98] text-sm font-bold text-white transition-all mb-4 relative overflow-hidden group"
+    >
+      <div
+        className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+        style={{
+          opacity: isHovered ? 1 : 0,
+          background: `radial-gradient(110px circle at ${mousePos.x}px ${mousePos.y}px, rgba(255, 255, 255, 0.15), transparent 80%)`,
+        }}
+      />
+      <svg className="w-4 h-4 text-white flex-shrink-0 z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+      </svg>
+      <span className="truncate z-10">New Application</span>
+    </button>
+  );
+};
+
 const ApplicationHistorySection: React.FC<{
   isAuthenticated: boolean;
   token: string | null;
@@ -46,25 +135,13 @@ const ApplicationHistorySection: React.FC<{
 
   return (
     <div>
-      <button
+      <SidebarButton
+        open={open}
         onClick={() => setOpen(o => !o)}
-        className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all text-left group ${
-          open ? 'bg-[#1e3a6e]/10 text-[#1e3a6e] dark:bg-blue-400/10 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 hover:text-gray-950 dark:hover:text-gray-100'
-        }`}
-      >
-        <span className={`transition-colors duration-200 ${open ? 'text-[#1e3a6e] dark:text-blue-300' : 'text-gray-400 dark:text-gray-500 group-hover:text-gray-650 dark:group-hover:text-gray-200'}`}>
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-        </span>
-        <span className="flex-1">Application History</span>
-        {isAuthenticated && (
-          <svg
-            className={`w-3.5 h-3.5 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        )}
-      </button>
+        label="Application History"
+        showArrow={isAuthenticated}
+        icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
+      />
 
       {open && isAuthenticated && (
         <div className="mt-1 ml-4 pl-3 border-l border-gray-100 dark:border-gray-800 space-y-0.5 animate-fade-in">
@@ -149,25 +226,13 @@ const FAQSection: React.FC<{ isAuthenticated: boolean }> = ({ isAuthenticated })
 
   return (
     <div>
-      <button
+      <SidebarButton
+        open={open}
         onClick={() => setOpen(o => !o)}
-        className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all text-left group ${
-          open ? 'bg-[#1e3a6e]/10 text-[#1e3a6e] dark:bg-blue-400/10 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 hover:text-gray-950 dark:hover:text-gray-100'
-        }`}
-      >
-        <span className={`transition-colors duration-200 ${open ? 'text-[#1e3a6e] dark:text-blue-300' : 'text-gray-400 dark:text-gray-500 group-hover:text-gray-650 dark:group-hover:text-gray-200'}`}>
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><circle cx="12" cy="12" r="10" /><path strokeLinecap="round" d="M12 16v-4M12 8h.01" /></svg>
-        </span>
-        <span className="flex-1">FAQ Section</span>
-        {isAuthenticated && (
-          <svg
-            className={`w-3.5 h-3.5 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        )}
-      </button>
+        label="FAQ Section"
+        showArrow={isAuthenticated}
+        icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><circle cx="12" cy="12" r="10" /><path strokeLinecap="round" d="M12 16v-4M12 8h.01" /></svg>}
+      />
 
       {open && isAuthenticated && (
         <div className="mt-1 ml-4 pl-3 border-l border-gray-100 dark:border-gray-800 space-y-1 animate-fade-in">
@@ -230,25 +295,13 @@ const SavedApplicationsSection: React.FC<{
 
   return (
     <div>
-      <button
+      <SidebarButton
+        open={open}
         onClick={() => setOpen(o => !o)}
-        className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all text-left group ${
-          open ? 'bg-[#1e3a6e]/10 text-[#1e3a6e] dark:bg-blue-400/10 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 hover:text-gray-950 dark:hover:text-gray-100'
-        }`}
-      >
-        <span className={`transition-colors duration-200 ${open ? 'text-[#1e3a6e] dark:text-blue-300' : 'text-gray-400 dark:text-gray-500 group-hover:text-gray-650 dark:group-hover:text-gray-200'}`}>
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-        </span>
-        <span className="flex-1">Saved Applications</span>
-        {isAuthenticated && (
-          <svg
-            className={`w-3.5 h-3.5 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        )}
-      </button>
+        label="Saved Applications"
+        showArrow={isAuthenticated}
+        icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>}
+      />
 
       {open && isAuthenticated && (
         <div className="mt-1 ml-4 pl-3 border-l border-gray-100 dark:border-gray-800 space-y-0.5 animate-fade-in">
@@ -291,12 +344,128 @@ const SavedApplicationsSection: React.FC<{
   );
 };
 
+const EMICalculatorSection: React.FC = () => {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState(5000000); // 50 Lakhs default
+  const [rate, setRate] = useState(8.5); // 8.5% default
+  const [tenure, setTenure] = useState(20); // 20 years default
+
+  // Calculate EMI
+  const monthlyRate = (rate / 12) / 100;
+  const totalMonths = tenure * 12;
+  const emi = amount * monthlyRate * Math.pow(1 + monthlyRate, totalMonths) / (Math.pow(1 + monthlyRate, totalMonths) - 1);
+  const totalPayment = emi * totalMonths;
+  const totalInterest = totalPayment - amount;
+
+  const formattedEMI = Math.round(emi).toLocaleString('en-IN');
+  const formattedInterest = Math.round(totalInterest).toLocaleString('en-IN');
+
+  const formatLakhs = (val: number) => {
+    if (val >= 10000000) return `₹${(val / 10000000).toFixed(2)} Cr`;
+    return `₹${(val / 100000).toFixed(0)} Lakh`;
+  };
+
+  const interestPercentage = (totalInterest / totalPayment) * 100;
+
+  return (
+    <div className="pt-2 border-t border-gray-150/40 dark:border-gray-800/80 mt-2">
+      <SidebarButton
+        open={open}
+        onClick={() => setOpen(o => !o)}
+        label="EMI Calculator"
+        showArrow={true}
+        icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <path strokeLinecap="round" d="M7 8h10M7 12h10M7 16h6" />
+        </svg>}
+      />
+
+      {open && (
+        <div className="mt-3 px-3 py-4 bg-white/60 dark:bg-gray-950/40 border border-gray-150/40 dark:border-gray-850/80 rounded-2xl space-y-4 animate-slide-up">
+          {/* EMI Display */}
+          <div className="text-center bg-gradient-to-tr from-blue-500/5 to-indigo-500/5 dark:from-blue-400/10 dark:to-indigo-400/10 border border-blue-100/50 dark:border-blue-400/10 rounded-2xl p-4">
+            <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Monthly EMI</p>
+            <p className="text-2xl font-black text-blue-600 dark:text-blue-300 mt-1">₹{formattedEMI}</p>
+            <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 font-medium">Total Interest: <span className="font-bold text-gray-700 dark:text-gray-200">₹{formattedInterest}</span></p>
+            
+            {/* Visual ratio bar */}
+            <div className="mt-3.5 h-1.5 w-full bg-blue-100/50 dark:bg-blue-950/50 rounded-full overflow-hidden flex">
+              <div className="bg-blue-600 dark:bg-blue-400 h-full" style={{ width: `${100 - interestPercentage}%` }} title="Principal" />
+              <div className="bg-amber-400 dark:bg-amber-500 h-full" style={{ width: `${interestPercentage}%` }} title="Interest" />
+            </div>
+          </div>
+
+          {/* Amount Slider */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-[11px] font-semibold text-gray-500 dark:text-gray-400 px-0.5">
+              <span>Loan Amount</span>
+              <span className="text-blue-600 dark:text-blue-300 font-bold">{formatLakhs(amount)}</span>
+            </div>
+            <input
+              type="range"
+              min={100000}
+              max={20000000}
+              step={100000}
+              value={amount}
+              onChange={e => setAmount(Number(e.target.value))}
+              className="w-full h-1 bg-gray-200 dark:bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-600 dark:accent-blue-400"
+            />
+          </div>
+
+          {/* Rate Slider */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-[11px] font-semibold text-gray-500 dark:text-gray-400 px-0.5">
+              <span>Interest Rate</span>
+              <span className="text-blue-600 dark:text-blue-300 font-bold">{rate}% p.a.</span>
+            </div>
+            <input
+              type="range"
+              min={5}
+              max={15}
+              step={0.1}
+              value={rate}
+              onChange={e => setRate(Number(e.target.value))}
+              className="w-full h-1 bg-gray-200 dark:bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-600 dark:accent-blue-400"
+            />
+          </div>
+
+          {/* Tenure Slider */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-[11px] font-semibold text-gray-500 dark:text-gray-400 px-0.5">
+              <span>Tenure</span>
+              <span className="text-blue-600 dark:text-blue-300 font-bold">{tenure} Years</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={30}
+              step={1}
+              value={tenure}
+              onChange={e => setTenure(Number(e.target.value))}
+              className="w-full h-1 bg-gray-200 dark:bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-600 dark:accent-blue-400"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({
   interestRates, loanTypes, onNewApplication,
   isAuthenticated, userName, onLoginClick, onLogoutClick, accountNumbers,
   theme, onToggleTheme, token, customerId, onLoadConversation,
 }) => {
   const [width, setWidth] = useState(288); // 72 tailwind = 288px
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMousePos({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
 
   const startResizing = React.useCallback((mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
@@ -314,7 +483,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, []);
 
   return (
-  <aside style={{ width }} className="relative flex-shrink-0 bg-[#fbfcfd] dark:bg-[#0b0f1a] border-r border-gray-150/70 dark:border-gray-800/70 flex flex-col h-full">
+  <aside 
+    style={{ width }} 
+    onMouseMove={handleMouseMove}
+    className="relative flex-shrink-0 bg-gradient-to-b from-blue-50/45 via-indigo-50/15 to-white dark:from-[#080c18] dark:via-[#0b0f1d] dark:to-[#060914] border-r border-gray-150/70 dark:border-gray-800/70 flex flex-col h-full overflow-hidden"
+  >
+    {/* Ambient interactive mouse glow */}
+    <div 
+      className="absolute inset-0 pointer-events-none transition-opacity duration-300 opacity-60 dark:opacity-40"
+      style={{
+        background: `radial-gradient(320px circle at ${mousePos.x}px ${mousePos.y}px, rgba(99, 102, 241, 0.07), transparent 85%)`
+      }}
+    />
     {/* Resizer */}
     <div
       onMouseDown={startResizing}
@@ -323,8 +503,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     
     {/* Logo */}
     <div className="flex items-center gap-3 px-6 py-6 border-b border-gray-100 dark:border-gray-800">
-      <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] flex items-center justify-center shadow-md shadow-blue-500/10">
-        <span className="text-white font-black text-base">N</span>
+      <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] flex items-center justify-center shadow-md shadow-blue-500/10 hover:scale-105 transition-transform duration-200">
+        <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 22h18M6 18V9M10 18V9M14 18V9M18 18V9M12 2L2 7h20L12 2z" />
+        </svg>
       </div>
       <div className="flex-1 overflow-hidden">
         <p className="text-sm font-extrabold text-gray-900 dark:text-gray-50 tracking-tight leading-none mb-1 truncate">National Bank</p>
@@ -350,15 +532,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {/* Nav */}
     <div className="flex-1 overflow-y-auto px-4 py-6 space-y-1">
       {/* New Application CTA */}
-      <button
-        onClick={onNewApplication}
-        className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-tr from-[#1e3a6e] to-[#254f96] hover:shadow-lg hover:shadow-blue-500/10 hover:brightness-110 active:scale-[0.98] text-sm font-bold text-white transition-all mb-4"
-      >
-        <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-        </svg>
-        <span className="truncate">New Application</span>
-      </button>
+      <NewApplicationButton onClick={onNewApplication} />
 
       <ApplicationHistorySection
         isAuthenticated={isAuthenticated}
@@ -373,6 +547,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         customerId={customerId}
         onLoadConversation={onLoadConversation}
       />
+      <EMICalculatorSection />
 
       {/* Interest Rates */}
       <div className="pt-5 overflow-hidden">
@@ -417,22 +592,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </div>
 
     {/* Sign In / Sign Out — reflects real auth state */}
-    <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/40">
+    <div className={`p-4 border-t transition-all duration-300 ${
+      isAuthenticated 
+        ? 'bg-emerald-500/5 dark:bg-emerald-400/5 border-emerald-500/10 dark:border-emerald-400/10' 
+        : 'border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/40'
+    }`}>
       {isAuthenticated ? (
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#1e3a6e] to-[#3b82f6] flex items-center justify-center text-white text-xs font-bold flex-shrink-0 shadow-sm">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white text-xs font-bold flex-shrink-0 shadow-md shadow-emerald-500/20 ring-2 ring-emerald-400/20 flex items-center justify-center">
             {userName?.charAt(0) ?? '?'}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{userName}</p>
-            <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+            <p className="text-sm font-bold text-gray-900 dark:text-gray-100 truncate">{userName}</p>
+            <p className="text-[9px] font-extrabold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
-              Signed in
+              Secure Session
             </p>
           </div>
           <button
             onClick={onLogoutClick}
-            className="text-xs flex-shrink-0 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 font-bold transition-colors"
+            className="text-xs flex-shrink-0 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 font-bold transition-colors"
           >
             Sign out
           </button>

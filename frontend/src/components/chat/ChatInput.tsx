@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 
 interface ChatInputProps {
   value: string;
@@ -8,6 +8,16 @@ interface ChatInputProps {
 
 export const ChatInput: React.FC<ChatInputProps> = ({ value, onChange, onSend }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [isHovered, setIsHovered] = useState(false);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMousePos({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -18,7 +28,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({ value, onChange, onSend })
 
   return (
     <div className="border-t border-gray-150/50 dark:border-gray-800 px-6 py-4 bg-white/95 dark:bg-[#0b0f1a]/95 backdrop-blur-md">
-      <div className="flex items-center gap-3 bg-gray-50/70 dark:bg-gray-900/60 hover:bg-gray-50 dark:hover:bg-gray-900 focus-within:bg-white dark:focus-within:bg-gray-900 rounded-2xl px-4 py-2.5 border border-gray-200 dark:border-gray-700 focus-within:border-[#1e3a6e] dark:focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-[#1e3a6e]/10 dark:focus-within:ring-blue-400/10 transition-all duration-200 shadow-sm">
+      <div 
+        onMouseMove={handleMouseMove}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        className="relative overflow-hidden flex items-center gap-3 bg-gray-50/70 dark:bg-gray-900/60 hover:bg-gray-50 dark:hover:bg-gray-900 focus-within:bg-white dark:focus-within:bg-gray-900 rounded-2xl px-4 py-2.5 border border-gray-200 dark:border-gray-700 focus-within:border-[#1e3a6e] dark:focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-[#1e3a6e]/10 dark:focus-within:ring-blue-400/10 transition-all duration-200 shadow-sm"
+      >
+        {/* Spotlight layer */}
+        <div
+          className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+          style={{
+            opacity: isHovered ? 1 : 0,
+            background: `radial-gradient(140px circle at ${mousePos.x}px ${mousePos.y}px, rgba(59, 130, 246, 0.1), transparent 85%)`,
+          }}
+        />
         {/* Attachment */}
         <button className="text-gray-400 dark:text-gray-500 hover:text-[#1e3a6e] dark:hover:text-blue-300 p-1 flex-shrink-0 transition-colors">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
