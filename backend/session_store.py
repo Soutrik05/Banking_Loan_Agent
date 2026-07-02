@@ -85,3 +85,28 @@ def set_decision(session_id: str, decision: dict):
 def reset_session(session_id: str):
     _SESSIONS[session_id] = _default_session()
     return _SESSIONS[session_id]
+
+
+# ---------------------------------------------------------------------------
+# Per-customer approved EMI tracking
+# Keyed by customer_id (not session_id) so it survives New Application.
+# Cleared when the customer explicitly resets or logs out.
+# ---------------------------------------------------------------------------
+
+_CUSTOMER_APPROVED_EMI: dict[str, float] = {}
+
+
+def set_customer_approved_emi(customer_id: str, emi: float) -> None:
+    """Record the monthly EMI of a just-approved loan so the next
+    credit assessment in this browser session can factor it in."""
+    _CUSTOMER_APPROVED_EMI[customer_id] = emi
+
+
+def get_customer_approved_emi(customer_id: str) -> float:
+    """Return the in-session approved EMI for this customer, or 0."""
+    return _CUSTOMER_APPROVED_EMI.get(customer_id, 0.0)
+
+
+def clear_customer_approved_emi(customer_id: str) -> None:
+    """Remove the stored approved EMI (e.g. on logout or manual reset)."""
+    _CUSTOMER_APPROVED_EMI.pop(customer_id, None)

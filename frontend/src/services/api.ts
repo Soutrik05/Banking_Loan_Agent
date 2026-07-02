@@ -178,6 +178,12 @@ export interface ConversationSummary {
   title: string;
   created_at: string;
   updated_at: string;
+  /** Populated once a loan decision is reached; null until then. */
+  loan_decision?: {
+    decision?: 'approved' | 'rejected' | 'conditional' | string;
+    loan_amount?: number | null;
+    flow_type?: string | null;
+  } | null;
 }
 
 export interface ConversationMessageRow {
@@ -289,4 +295,23 @@ export const cancelAppointment = (appointmentId: string, token: string) =>
     'POST',
     '/appointments/cancel',
     { appointment_id: appointmentId, token }
+  );
+
+/* ─── FINANCIAL ADVISOR ─── */
+
+export const askAdvisor = (
+  message: string,
+  sessionId: string,
+  token: string,
+  conversationHistory: Array<{ role: string; content: string }>
+) =>
+  request<{ reply: string; type: string }>(
+    'POST',
+    '/advisor/chat',
+    {
+      message,
+      session_id: sessionId,
+      token,
+      conversation_history: conversationHistory,
+    }
   );

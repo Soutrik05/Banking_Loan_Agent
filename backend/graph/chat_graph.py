@@ -64,7 +64,10 @@ from agents.financial_document_agent import (
     get_upload_status,
     is_awaiting_documents,
 )
-from session_store import get_session, mark_step
+from session_store import (
+    get_session, mark_step,
+    get_customer_approved_emi, set_customer_approved_emi,
+)
 from database.appointments import get_appointment, cancel_appointment
 from agents.property_verification_agent import verify_property, verify_seller_property
 from agents.property_valuation_agent import valuate_property
@@ -105,6 +108,7 @@ class ChatState(TypedDict, total=False):
         "risk_assessment", "credit_assessment",
         "awaiting_appointment_decision", "awaiting_appointment_form",
         "awaiting_cancel_confirmation",
+        "awaiting_address_confirmation",
     ]
     shown_properties: list
     selected_property_id: Optional[str]
@@ -138,6 +142,10 @@ class ChatState(TypedDict, total=False):
     # Real cancellation flow for an existing appointment — the id of the
     # appointment awaiting a yes/no confirmation to actually cancel.
     pending_cancel_appointment_id: Optional[str]
+
+    # Flow 2B address-mismatch confirmation: the parsed PROPERTY_DATA JSON
+    # dict stored while waiting for the user's locality-mismatch answer.
+    pending_property_data: Optional[dict]
 
     # New-customer, pre-JWT onboarding stage (KYC identity verified, financial
     # documents being collected). Kept separate from `stage` above: once
@@ -454,6 +462,11 @@ _PROPERTY_CHOICE_ANSWERS = (
     "i want to buy a property", "i want to buy a new property",
 )
 
+# Only stages where it is appropriate to (re-)emit the property-choice MCQ.
+# Any other stage means the user has already progressed past that question,
+# so the greeting must NEVER fire — even if MemorySaver loses its checkpoint.
+PROPERTY_CHOICE_STAGES = {"new", "awaiting_property_choice"}
+
 
 def _authed_entry_node(state: ChatState) -> dict:
     """Loads/refreshes the customer profile. On the very first authenticated
@@ -484,6 +497,20 @@ def _authed_entry_node(state: ChatState) -> dict:
     already_answered = message.lower().strip() in _PROPERTY_CHOICE_ANSWERS
     mid_flow_message = "registration_number" in message or message.strip().startswith("PROPERTY_DATA:")
 
+    # Hard guard: only emit the property-choice greeting when the session is
+    # genuinely at the beginning.  If stage is anything outside
+    # PROPERTY_CHOICE_STAGES the user has already progressed past that step —
+    # skip all greeting logic and route their message normally.
+    if stage not in PROPERTY_CHOICE_STAGES:
+        return {
+            "customer_profile": profile,
+            "stage": stage,
+            "selected_property_id": selected_property_id,
+            "shown_properties": shown_properties,
+            "current_agent": state.get("current_agent"),
+            "just_handled": False,
+        }
+
     if stage == "new":
         if mid_flow_message:
             # Don't touch stage at all — _route_after_entry's
@@ -494,9 +521,8 @@ def _authed_entry_node(state: ChatState) -> dict:
                 "current_agent": "authed_entry_agent",
                 "just_handled": False,
             }
-        if is_existing or already_answered:
-            # Existing customer (already welcomed/greeted on the frontend), or a
-            # fresh thread whose first message is already an answer to the
+        if already_answered:
+            # Fresh thread whose first message is already an answer to the
             # property-choice question (e.g. "New Application" re-showed the
             # question locally and the user clicked a button) — skip the
             # duplicate welcome, transition stage, and let the router handle
@@ -507,17 +533,23 @@ def _authed_entry_node(state: ChatState) -> dict:
                 "current_agent": "authed_entry_agent",
                 "just_handled": False,
             }
-        else:
-            # New customer: greeting hasn't been shown yet. Greet them.
-            card = get_property_choice_message()
-            first_name = (user_context.get("full_name") or "there").split()[0]
+        # Always emit the property-choice MCQ as a terminal response on the
+        # very first authenticated turn.  Using just_handled=True for BOTH
+        # new and existing customers ensures the user's message is never
+        # silently swallowed into an FAQ answer that then appends the MCQ
+        # again, which was the source of the "greeting repeating" bug.
+        card = get_property_choice_message()
+        first_name = (user_context.get("full_name") or "there").split()[0]
+        if is_existing:
             reply = f"Welcome back, {first_name}! {card['message']}"
-            return _make_node_output(
-                state, reply, "mcq", "awaiting_property_choice", "authed_entry_agent",
-                options=card["options"],
-                customer_profile=profile,
-                just_handled=True
-            )
+        else:
+            reply = f"Welcome back, {first_name}! {card['message']}"
+        return _make_node_output(
+            state, reply, "mcq", "awaiting_property_choice", "authed_entry_agent",
+            options=card["options"],
+            customer_profile=profile,
+            just_handled=True
+        )
 
     return {
         "customer_profile": profile,
@@ -891,6 +923,46 @@ def _property_valuation_node(state: ChatState) -> dict:
     )
 
 
+# ---------------------------------------------------------------------------
+# Flow 2B — address locality mismatch detection
+# ---------------------------------------------------------------------------
+
+# All Kolkata localities recognised by the mock land-registry API.  Only
+# flags a mismatch when BOTH the user-stated address AND the document address
+# contain a known locality AND those two localities differ.  "Kolkata" alone
+# (no specific area) is intentionally absent — too vague to compare.
+_KOLKATA_LOCALITIES = [
+    "ballygunge", "salt lake", "new town", "tollygunge",
+    "dum dum", "lake town", "entally", "rajarhat",
+    "behala", "jadavpur", "kasba", "garia", "howrah",
+    "shyambazar", "ultadanga", "liluah", "santragachi",
+    "park street", "camac street", "bhowanipore",
+    "lake gardens", "alipore", "baranagar", "barasat",
+    "thakurpukur", "maheshtala", "shibpur", "narendrapur",
+    "santoshpur",
+]
+
+
+def _extract_locality(address: str) -> Optional[str]:
+    """Return the first recognised Kolkata locality found in *address*,
+    or None if no known locality is present."""
+    addr_lower = (address or "").lower()
+    for loc in _KOLKATA_LOCALITIES:
+        if loc in addr_lower:
+            return loc
+    return None
+
+
+def _check_address_mismatch(user_stated: str, doc_address: str) -> bool:
+    """Return True only when both addresses contain a known locality AND
+    those localities differ — avoids false positives on vague addresses."""
+    if not user_stated or not doc_address:
+        return False
+    stated_loc = _extract_locality(user_stated)
+    doc_loc = _extract_locality(doc_address)
+    return bool(stated_loc and doc_loc and stated_loc != doc_loc)
+
+
 def _own_choice_verification_node(state: ChatState) -> dict:
     """Flow 2B (Own Choice): verifies the SELLER's ownership of the
     property the customer wants to buy — not the customer's own ownership,
@@ -925,6 +997,34 @@ def _own_choice_verification_node(state: ChatState) -> dict:
                 "flow_type": "own_choice",
             },
             customer_profile=state.get("customer_profile"),
+        )
+
+    # Address locality mismatch check — compare what the customer said in
+    # the "What is the address?" step against what the uploaded documents
+    # actually say.  Only flags when BOTH sides have a known Kolkata
+    # locality AND those localities differ; vague addresses (e.g. just
+    # "Kolkata") are never flagged to avoid false positives.
+    user_address = state.get("own_choice_address") or ""
+    doc_address = data.get("address") or ""
+    if _check_address_mismatch(user_address, doc_address):
+        stated_loc = (_extract_locality(user_address) or "").title()
+        doc_loc = (_extract_locality(doc_address) or "").title()
+        reply = (
+            f"We noticed an address mismatch:\n\n"
+            f"**You mentioned:** {user_address}\n"
+            f"**Document shows:** {doc_address}\n\n"
+            f"The property areas don't match ({stated_loc} vs {doc_loc}). "
+            f"Please confirm which is correct:"
+        )
+        return _make_node_output(
+            state, reply, "mcq", "awaiting_address_confirmation",
+            "own_choice_verification_agent",
+            options=[
+                {"label": f"Document is correct ({doc_loc})", "id": "confirm_doc"},
+                {"label": "Let me re-enter the address", "id": "reenter"},
+            ],
+            customer_profile=state.get("customer_profile"),
+            pending_property_data=data,
         )
 
     result = verify_seller_property(
@@ -1043,7 +1143,11 @@ def _credit_assessment_node(state: ChatState) -> dict:
     max_loan = valuation_result.get("max_loan") or 0
 
     if customer_id:
-        result = assess_credit(customer_id, max_loan)
+        # Factor in any EMI from a loan approved earlier in this browser
+        # session (keyed by customer_id in session_store so it persists
+        # across New Application clicks, unlike the MemorySaver checkpoint).
+        approved_emi = get_customer_approved_emi(customer_id)
+        result = assess_credit(customer_id, max_loan, approved_session_emi=approved_emi)
     else:
         result = {
             "approved": False, "cibil_score": None, "cibil_rating": "Poor",
@@ -1089,11 +1193,21 @@ def _loan_decision_node(state: ChatState) -> dict:
 
     mark_step(session_id, "decision", "completed")
 
+    # If this application was approved, record its monthly EMI so that a
+    # subsequent credit assessment in the same browser session (new session_id
+    # but same customer_id) can factor it in as an additional obligation.
+    if decision_result.get("decision") == "approved":
+        customer_id = user_context.get("customer_id")
+        if customer_id:
+            approved_emi = credit_result.get("monthly_emi_estimate") or 0
+            set_customer_approved_emi(customer_id, approved_emi)
+
     return _make_node_output(
-        state, decision_result["summary"], "text", "general", "loan_decision_agent",
+        state, decision_result["summary"], "loan_decision", "general", "loan_decision_agent",
         metadata={"valuation_result": state.get("valuation_result")},
         customer_profile=state.get("customer_profile"),
         loan_decision_result=decision_result,
+        display_card=decision_result.get("display_card"),
     )
 
 
@@ -1246,6 +1360,66 @@ def _cancel_appointment_decision_node(state: ChatState) -> dict:
     return _make_node_output(
         state, reply, "text", "awaiting_cancel_confirmation", "cancel_appointment_agent",
         customer_profile=state.get("customer_profile"),
+    )
+
+
+def _address_confirm_doc_node(state: ChatState) -> dict:
+    """User chose 'Document is correct' during the Flow 2B address-mismatch
+    prompt — instant, no LLM.  Updates own_choice_address to the address
+    found in the document, then runs seller verification immediately in the
+    same turn so the user doesn't have to re-submit anything."""
+    data = state.get("pending_property_data") or {}
+    doc_address = data.get("address") or ""
+
+    # Proceed with verification using the document's address as authoritative
+    result = verify_seller_property(
+        registration_number=data.get("registration_number"),
+        seller_name=data.get("owner_name"),
+        address=doc_address,
+        area_sqft=data.get("area_sqft"),
+    )
+
+    session_id = state.get("session_id", "")
+    mark_step(session_id, "property", "completed" if result["verified"] else "failed")
+
+    if result.get("status") == "manual_review":
+        reply = (
+            result["summary"]
+            + "\n\nWould you like to book an appointment with our property "
+              "verification team to resolve this?"
+        )
+        return _make_node_output(
+            state, reply, "manual_review_appointment", "awaiting_appointment_decision",
+            "own_choice_verification_agent",
+            customer_profile=state.get("customer_profile"),
+            property_data=data,
+            property_verification_result=result,
+            own_choice_address=doc_address,
+            pending_property_data=None,
+        )
+
+    next_stage = "property_valuation" if result["verified"] else "general"
+    return _make_node_output(
+        state, result["summary"], "text", next_stage,
+        "own_choice_verification_agent",
+        customer_profile=state.get("customer_profile"),
+        property_data=data,
+        property_verification_result=result,
+        own_choice_address=doc_address,
+        pending_property_data=None,
+    )
+
+
+def _address_reenter_node(state: ChatState) -> dict:
+    """User chose to re-enter the address during the Flow 2B
+    address-mismatch prompt — instant, no LLM.  Clears the pending
+    property data and sends the user back to the address-collection step."""
+    return _make_node_output(
+        state, OWN_CHOICE_ADDRESS_PROMPT, "text", "awaiting_own_choice_address",
+        "own_choice_agent",
+        flow_type="own_choice",
+        customer_profile=state.get("customer_profile"),
+        pending_property_data=None,
     )
 
 
@@ -1541,6 +1715,13 @@ def _route_after_entry(state: ChatState) -> str:
     if stage == "awaiting_cancel_confirmation":
         return "cancel_appointment_decision"
 
+    # Flow 2B address-mismatch confirmation — instant, no LLM.
+    if stage == "awaiting_address_confirmation":
+        msg_lower = message.lower()
+        if "document is correct" in msg_lower:
+            return "address_confirm_doc"
+        return "address_reenter"
+
     lower = message.lower().strip()
 
     # 0. Property pipeline — always wins over everything else below.
@@ -1672,6 +1853,8 @@ _graph.add_node("appointment_decision", _appointment_decision_node)
 _graph.add_node("appointment_booked", _appointment_booked_node)
 _graph.add_node("cancel_appointment", _cancel_appointment_node)
 _graph.add_node("cancel_appointment_decision", _cancel_appointment_decision_node)
+_graph.add_node("address_confirm_doc", _address_confirm_doc_node)
+_graph.add_node("address_reenter", _address_reenter_node)
 
 _graph.add_conditional_edges(
     START, _route_entry,
@@ -1712,6 +1895,8 @@ _graph.add_conditional_edges(
         "appointment_booked": "appointment_booked",
         "cancel_appointment": "cancel_appointment",
         "cancel_appointment_decision": "cancel_appointment_decision",
+        "address_confirm_doc": "address_confirm_doc",
+        "address_reenter": "address_reenter",
     },
 )
 
@@ -1804,6 +1989,14 @@ _graph.add_edge("appointment_decision", END)
 _graph.add_edge("appointment_booked", END)
 _graph.add_edge("cancel_appointment", END)
 _graph.add_edge("cancel_appointment_decision", END)
+# Flow 2B address-mismatch confirmation nodes.
+# address_confirm_doc may chain into own_choice_valuation if verification
+# approves; address_reenter terminates (the user re-types their address next).
+_graph.add_conditional_edges(
+    "address_confirm_doc", _route_after_own_choice_verification,
+    {"own_choice_valuation": "own_choice_valuation", "end": END},
+)
+_graph.add_edge("address_reenter", END)
 _graph.add_edge("property_document_upload", END)
 _graph.add_edge("home_loan", END)
 _graph.add_edge("explain_choice", END)
@@ -1869,6 +2062,7 @@ def run_chat_graph(message: str, session_id: str, user_context: Optional[dict]) 
         "doc_type": result.get("doc_type"),
         "sources": result.get("sources"),
         "metadata": result.get("metadata"),
+        "display_card": result.get("display_card"),
     }
 
 

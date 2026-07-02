@@ -721,6 +721,7 @@ interface ChatWindowProps {
   customerId: string | null;
   customerPhone?: string;
   onNewApplication?: () => void;
+  onOpenAdvisor?: () => void;
   userName?: string | null;
 }
 
@@ -765,7 +766,7 @@ const CardSpotlight: React.FC<{
         transform: `perspective(800px) rotateX(${tilt.rx}deg) rotateY(${tilt.ry}deg)`,
         transition: isHovered ? 'none' : 'transform 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
-      className={`relative overflow-hidden border border-gray-200/80 dark:border-gray-800/80 rounded-2xl p-6 text-left hover:shadow-xl active:scale-[0.98] transition-all duration-300 group shadow-sm flex flex-col justify-between min-h-[160px] w-full bg-gradient-to-br ${bgClass}`}
+      className={`relative overflow-hidden border border-gray-200/80 dark:border-gray-800/80 rounded-2xl p-4 text-left hover:shadow-xl active:scale-[0.98] transition-all duration-300 group shadow-sm flex flex-col justify-between min-h-[96px] w-full bg-gradient-to-br ${bgClass}`}
     >
       {/* Spotlight layer */}
       <div
@@ -777,17 +778,17 @@ const CardSpotlight: React.FC<{
       />
       
       <div className="z-10">
-        <p className={`text-lg font-bold transition-colors mb-1.5 ${textAccentClass}`}>
+        <p className={`text-[15px] font-bold transition-colors mb-1 ${textAccentClass}`}>
           {label}
         </p>
         <p className="text-xs text-gray-400 dark:text-gray-500 font-medium leading-relaxed">
           {desc}
         </p>
       </div>
-      
-      <div className={`z-10 mt-4 flex items-center gap-1.5 text-xs font-semibold opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all duration-300 ${textAccentClass}`}>
+
+      <div className={`z-10 mt-2 flex items-center gap-1.5 text-[11px] font-semibold opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all duration-300 ${textAccentClass}`}>
         <span>Get Started</span>
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
       </div>
@@ -823,9 +824,25 @@ const InteractiveBotLogo: React.FC = () => {
   );
 };
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId, customerPhone, onNewApplication, userName }) => {
+function getGreetingTimeWord(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Morning';
+  if (h < 17) return 'Afternoon';
+  return 'Evening';
+}
+
+function isGreetingMessage(msg: Message): boolean {
+  return (
+    msg.role === 'assistant' &&
+    /^(Good (morning|afternoon|evening)|Let's start fresh)/i.test(msg.content)
+  );
+}
+
+export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId, customerPhone, onNewApplication, onOpenAdvisor, userName }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  // Tracks whether the user has dismissed the post-decision advisor prompt
+  const [advisorPromptDismissed, setAdvisorPromptDismissed] = useState(false);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -849,20 +866,20 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const isLoggedIn = !!token;
-
-  // Contrasting color option cards
+  // Guest landing cards — only shown when no messages (unauthenticated).
   const guestCards = [
     { label: 'Existing Customer', desc: 'Login and continue application', bgClass: 'from-blue-50/60 to-indigo-50/60 dark:from-[#11172a]/70 dark:to-[#0f172a]/70 hover:border-blue-500/50', spotlightColor: 'rgba(59, 130, 246, 0.15)', textAccentClass: 'text-blue-600 dark:text-blue-300' },
-    { label: 'Just Browsing', desc: 'Explore rates & services', bgClass: 'from-emerald-50/60 to-teal-50/60 dark:from-[#0b1b19]/70 dark:to-[#061413]/70 hover:border-emerald-500/50', spotlightColor: 'rgba(16, 185, 129, 0.15)', textAccentClass: 'text-emerald-600 dark:text-emerald-300' }
+    { label: 'Just Browsing', desc: 'Explore rates & services', bgClass: 'from-emerald-50/60 to-teal-50/60 dark:from-[#0b1b19]/70 dark:to-[#061413]/70 hover:border-emerald-500/50', spotlightColor: 'rgba(16, 185, 129, 0.15)', textAccentClass: 'text-emerald-600 dark:text-emerald-300' },
   ];
 
-  const memberCards = [
-    { label: 'I own a property', desc: 'Apply for a Loan Against Property', bgClass: 'from-blue-50/60 to-indigo-50/60 dark:from-[#11172a]/70 dark:to-[#0f172a]/70 hover:border-blue-500/50', spotlightColor: 'rgba(59, 130, 246, 0.15)', textAccentClass: 'text-blue-600 dark:text-blue-300' },
-    { label: 'I want to buy a property', desc: 'Apply for a Home Loan', bgClass: 'from-emerald-50/60 to-teal-50/60 dark:from-[#0b1b19]/70 dark:to-[#061413]/70 hover:border-emerald-500/50', spotlightColor: 'rgba(16, 185, 129, 0.15)', textAccentClass: 'text-emerald-600 dark:text-emerald-300' }
-  ];
-
-  const activeCards = isLoggedIn ? memberCards : guestCards;
+  // Three display states:
+  //  showWelcome  — no messages at all (unauthenticated landing)
+  //  showGreeting — exactly one greeting message, no typing yet (just logged in)
+  //  showChat     — normal conversation view
+  const showWelcome = messages.length === 0 && !isTyping;
+  const showGreeting = messages.length === 1 && !isTyping && isGreetingMessage(messages[0]);
+  const showChat = !showWelcome && !showGreeting;
+  const firstName = (userName || 'there').split(' ')[0];
 
   return (
     <div 
@@ -883,7 +900,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
 
       {/* Message timeline viewport */}
       <div className={`overflow-y-auto px-6 py-6 space-y-4 transition-all duration-500 ${
-        messages.length === 0 && !isTyping ? 'opacity-0 pointer-events-none h-0 py-0' : 'flex-1 opacity-100 h-full'
+        showChat ? 'flex-1 opacity-100 h-full' : 'opacity-0 pointer-events-none h-0 py-0'
       }`}>
         {messages.map((msg) => {
           // The Sale Deed confirm-and-proceed payload is an internal signal
@@ -1057,9 +1074,38 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
 
             {/* Final loan decision — rendered as a card, raw JSON hidden by MessageBubble */}
             {msg.role === 'assistant' && msg.content.startsWith(LOAN_DECISION_PREFIX) && (
-              <div className="pl-11 animate-fade-in">
-                <LoanDecisionCardFromMessage content={msg.content} />
-              </div>
+              <>
+                <div className="pl-11 animate-fade-in">
+                  <LoanDecisionCardFromMessage content={msg.content} />
+                </div>
+                {/* Advisor MCQ prompt — shown once, below the decision card, dismissed once opened */}
+                {onOpenAdvisor && !advisorPromptDismissed && (
+                  <div className="pl-11 mt-3 animate-fade-in">
+                    <div className="bg-violet-50/80 dark:bg-violet-950/30 border border-violet-100 dark:border-violet-900/40 rounded-2xl px-4 py-3 max-w-sm">
+                      <p className="text-xs font-semibold text-violet-700 dark:text-violet-300 mb-2.5 flex items-center gap-1.5">
+                        <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        Would you like personalised financial recommendations?
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => { setAdvisorPromptDismissed(true); onOpenAdvisor(); }}
+                          className="flex-1 text-[11px] font-bold text-white bg-gradient-to-tr from-violet-600 to-purple-500 hover:brightness-110 active:scale-[0.97] py-2 rounded-xl transition-all shadow-sm shadow-purple-500/15"
+                        >
+                          Yes, help me
+                        </button>
+                        <button
+                          onClick={() => setAdvisorPromptDismissed(true)}
+                          className="flex-1 text-[11px] font-bold text-violet-600 dark:text-violet-400 border border-violet-200 dark:border-violet-800/60 hover:bg-violet-50 dark:hover:bg-violet-900/20 py-2 rounded-xl transition-all"
+                        >
+                          No, thanks
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
           );
@@ -1083,16 +1129,41 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
         <div ref={bottomRef} />
       </div>
 
-      {/* Claude-style Welcome viewport */}
+      {/* Claude-style authenticated greeting (just logged in / new application) */}
+      <div className={`w-full transition-all duration-500 ease-in-out flex flex-col items-center justify-center px-8 text-center z-10 ${
+        showGreeting
+          ? 'flex-1 opacity-100 translate-y-0'
+          : 'h-0 opacity-0 overflow-hidden pointer-events-none'
+      }`}>
+        <h1 className="text-5xl sm:text-6xl font-light text-gray-800 dark:text-gray-100 tracking-tight mb-3">
+          {getGreetingTimeWord()}, {firstName}
+        </h1>
+        <p className="text-base text-gray-500 dark:text-gray-400 font-medium mb-10">
+          How can I help you today?
+        </p>
+        <div className="flex flex-wrap gap-2.5 justify-center">
+          {(messages[0]?.options || []).map((opt: any) => (
+            <button
+              key={opt.id || opt.label}
+              onClick={() => onWelcomeOption(opt.label)}
+              className="bg-white/90 dark:bg-[#111625]/90 border border-blue-500/25 dark:border-blue-400/20 text-sm font-semibold text-blue-600 dark:text-blue-300 px-5 py-2.5 rounded-xl hover:border-blue-500 dark:hover:border-blue-400 hover:bg-blue-500/5 dark:hover:bg-blue-400/10 hover:shadow-md active:scale-[0.97] transition-all duration-200 shadow-sm"
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Unauthenticated landing — "Welcome to BankWise AI" with cards */}
       <div className={`w-full transition-all duration-700 ease-in-out flex flex-col items-center justify-center px-6 text-center z-10 ${
-        messages.length === 0 && !isTyping
-          ? 'flex-1 opacity-100 scale-100 translate-y-0' 
+        showWelcome
+          ? 'flex-1 opacity-100 scale-100 translate-y-0'
           : 'h-0 opacity-0 scale-95 -translate-y-12 overflow-hidden pointer-events-none py-0'
       }`}>
         <div className="w-full max-w-xl flex flex-col items-center text-center">
           <InteractiveBotLogo />
 
-          <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-4 flex flex-col sm:flex-row items-center justify-center gap-2 drop-shadow-[0_2px_8px_rgba(0,0,0,0.06)] dark:drop-shadow-[0_4px_16px_rgba(0,0,0,0.4)]">
+          <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-4 flex flex-col sm:flex-row items-center justify-center gap-2">
             <span>Welcome to</span>
             <span className="relative pb-2 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-500 to-purple-600 dark:from-blue-400 dark:via-indigo-300 dark:to-purple-400 font-black">
               BankWise AI
@@ -1102,19 +1173,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
             </span>
           </h1>
 
-          {isLoggedIn && userName ? (
-            <p className="text-sm font-bold text-blue-600 dark:text-blue-300 bg-blue-500/10 dark:bg-blue-400/10 px-4 py-1.5 rounded-full mb-6 animate-fade-in flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              Welcome back, {userName}!
-            </p>
-          ) : null}
-
-          <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md leading-relaxed mb-10 font-medium">
+          <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md leading-relaxed mb-6 font-medium">
             Your intelligent loan assistant. I can help you with loan applications, property verification, eligibility checks, and more.
           </p>
 
-          <div className="grid grid-cols-2 gap-4 w-full">
-            {activeCards.map(opt => (
+          <div className="grid grid-cols-2 gap-3 w-full">
+            {guestCards.map(opt => (
               <CardSpotlight
                 key={opt.label}
                 label={opt.label}

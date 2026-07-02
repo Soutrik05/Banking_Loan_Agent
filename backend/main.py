@@ -46,6 +46,7 @@ from database.conversations import (
     save_message,
     update_conversation_title,
     generate_conversation_title,
+    save_loan_decision,
 )
 from database.document_store import upload_property_document, get_property_documents
 from database.appointments import create_appointment, get_appointment, cancel_appointment, get_appointment_by_id
@@ -141,6 +142,12 @@ class AppointmentRequest(BaseModel):
 class CancelAppointmentRequest(BaseModel):
     appointment_id: str
     token: str
+
+class AdvisorRequest(BaseModel):
+    message: str
+    session_id: str
+    token: str
+    conversation_history: list = []
 
 
 def _get_user_from_token(token: str) -> dict:
@@ -313,7 +320,16 @@ def chat(req: ChatRequest):
                 threading.Thread(target=_bg_title, daemon=True).start()
         except Exception as e:
             print(f"SUPABASE ERROR: {e}")
-    
+
+        # Persist loan decision to the conversation row so the sidebar
+        # can show a status badge and an outcome-aware title without
+        # waiting for the next LLM title-generation background task.
+        if response.get("type") == "loan_decision" and response.get("display_card"):
+            try:
+                save_loan_decision(req.session_id, response["display_card"])
+            except Exception as e:
+                print(f"loan decision persist error: {e}")
+
 
     return response
 
@@ -589,6 +605,30 @@ def property_documents(session_id: str, token: str):
         return []
 
 
+# Maps each expected slot type to the OCR document_type values that are
+# valid for it. Keeps the mapping explicit rather than a string-equals
+# check, so a single slot can accept closely related types (e.g. "noc"
+# and "noc_builder" are interchangeable from OCR's perspective).
+_EXPECTED_DOC_CONTENT: dict[str, list[str]] = {
+    "sale_deed":                ["sale_deed"],
+    "succession_certificate":   ["succession_certificate"],
+    "mutation_certificate":     ["mutation_certificate"],
+    "gift_deed":                ["gift_deed"],
+    "encumbrance_certificate":  ["encumbrance_certificate"],
+    "noc_builder":              ["noc_builder", "noc"],
+}
+
+_DOC_DISPLAY_NAMES: dict[str, str] = {
+    "sale_deed":               "Sale Deed",
+    "succession_certificate":  "Succession/Will Certificate",
+    "mutation_certificate":    "Mutation Certificate",
+    "gift_deed":               "Gift Deed",
+    "encumbrance_certificate": "Encumbrance Certificate",
+    "noc_builder":             "NOC from Builder/Society",
+    "noc":                     "NOC from Builder/Society",
+}
+
+
 @app.post("/property/upload-sale-deed")
 async def property_upload_sale_deed(
     file: UploadFile = File(...),
@@ -603,6 +643,11 @@ async def property_upload_sale_deed(
     uploads alike (doc_type tells us which). Works for ANY customer's ANY
     valid document — OCR extracts the fields, nothing here is hardcoded
     to a specific person or scenario.
+
+    Also validates that the OCR-detected document_type matches the slot's
+    expected type, so a user can't accidentally (or deliberately) upload
+    a Succession Certificate into the Mutation Certificate slot and have
+    it accepted.
     """
     user_context = _get_user_from_token(token)
 
@@ -610,6 +655,28 @@ async def property_upload_sale_deed(
     extraction = extract_sale_deed_fields(file_bytes, file.filename, customer_id)
     if not extraction["success"]:
         return {"success": False, "doc_type": doc_type, "message": extraction["message"]}
+
+    # Document type validation — only checked when the OCR produced a
+    # confident document_type detection AND the slot has a known expectation.
+    extracted_fields = extraction["extracted_fields"]
+    extracted_doc_type = extracted_fields.get("document_type")
+    allowed_types = _EXPECTED_DOC_CONTENT.get(doc_type)
+
+    if extracted_doc_type and allowed_types and extracted_doc_type not in allowed_types:
+        expected_name = _DOC_DISPLAY_NAMES.get(doc_type, doc_type)
+        found_name = _DOC_DISPLAY_NAMES.get(extracted_doc_type, extracted_doc_type)
+        return {
+            "success": False,
+            "extracted_fields": {},
+            "document_type_mismatch": True,
+            "expected_type": doc_type,
+            "found_type": extracted_doc_type,
+            "message": (
+                f"❌ Wrong document uploaded. This slot expects a "
+                f"{expected_name} but you uploaded a {found_name}. "
+                f"Please upload the correct document."
+            ),
+        }
 
     try:
         upload_property_document(
@@ -624,7 +691,7 @@ async def property_upload_sale_deed(
 
     return {
         "success": True,
-        "extracted_fields": extraction["extracted_fields"],
+        "extracted_fields": extracted_fields,
         "doc_type": doc_type,
         "message": extraction["message"],
         "next_step": "confirm_and_verify",
@@ -723,3 +790,32 @@ def get_rates():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ─────────────────────────────────────────────────────────────
+# FINANCIAL ADVISOR — personal financial Q&A with customer context
+# ─────────────────────────────────────────────────────────────
+
+@app.post("/advisor/chat")
+async def advisor_chat(req: AdvisorRequest):
+    """
+    Financial advisor endpoint — handles any financial query with full
+    customer context. Separate from the main loan-application chat;
+    accessible any time the customer is authenticated.
+    """
+    user_context = _get_user_from_token(req.token)
+
+    # Surface the most recent loan decision from the session if available
+    session = get_session(req.session_id) or {}
+    loan_decision = session.get("loan_decision")
+
+    from agents.financial_advisor_agent import get_financial_advice
+
+    reply = get_financial_advice(
+        customer_id=user_context["customer_id"],
+        user_message=req.message,
+        conversation_history=req.conversation_history,
+        loan_decision=loan_decision,
+    )
+
+    return {"reply": reply, "type": "advisor"}

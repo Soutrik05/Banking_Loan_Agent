@@ -5,11 +5,27 @@ import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatInput } from './components/chat/ChatInput';
 import { LoginPage } from './pages/LoginPage';
 import { FileUploader } from './components/FileUploader';
+import { AdvisorPanel } from './components/AdvisorPanel';
 import { useChat } from './hooks/useChat';
 import { useAuth } from './hooks/useAuth';
 import { useTheme } from './hooks/useTheme';
 import { loanTypes, interestRates, creditScore } from './store/appState';
 import type { CreditScore, CustomerProfile, Message } from './types';
+
+function getTimeBasedGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+const LOAN_OPTIONS = [
+  { label: 'I own a property', value: 'I own a property' },
+  { label: 'I want to buy a property', value: 'I want to buy a property' },
+  { label: 'Just browsing', value: 'Just browsing' },
+];
+
+const API_BASE = import.meta.env.VITE_API_URL as string;
 
 export default function App() {
   // Stateful, not a module-level const — "New Application" rotates this to a
@@ -29,6 +45,15 @@ export default function App() {
 
   const [currentCreditScore, setCurrentCreditScore] = useState<CreditScore>(creditScore);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+  // Warmup ping — wakes up Render's cold-start container so the user's
+  // first real message doesn't bear the full spin-up delay.
+  const [isWarmingUp, setIsWarmingUp] = useState(true);
+  useEffect(() => {
+    fetch(`${API_BASE}/health`, { method: 'GET' })
+      .then(() => setIsWarmingUp(false))
+      .catch(() => setIsWarmingUp(false)); // silent fail — still mark done
+  }, []);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -70,6 +95,9 @@ export default function App() {
     const interval = setInterval(pollStatus, 15000);
     return () => clearInterval(interval);
   }, [auth.step, sessionId]);
+
+  // Financial Advisor panel — separate from the main loan chat
+  const [advisorOpen, setAdvisorOpen] = useState(false);
 
   // Guest browsing: the login screen only shows when explicitly triggered —
   // either the user clicks Sign In, or the orchestrator detects loan intent
@@ -127,10 +155,18 @@ export default function App() {
       resetChat();
       setInitialMessages(undefined);
       setCurrentCreditScore(creditScore);
+      // Inject personalised time-based greeting immediately so the chat
+      // viewport opens straight away instead of the landing page.
+      const firstName = (auth.fullName || 'there').split(' ')[0];
+      const greeting = getTimeBasedGreeting();
+      injectBotMessage(
+        `${greeting}, ${firstName}! 👋 What can I help you with today?`,
+        LOAN_OPTIONS,
+      );
     }
 
     prevCustomerIdRef.current = newCustomerId;
-  }, [auth.customerId]);
+  }, [auth.customerId, auth.fullName, injectBotMessage]);
 
   const handleNewApplication = () => {
     setSessionId(crypto.randomUUID());
@@ -139,15 +175,10 @@ export default function App() {
 
     if (auth.token) {
       setCurrentCreditScore(creditScore);
-      // Already authenticated — stay in the chat instead of dropping back to
-      // the guest "Existing Customer / Just Browsing" landing screen, and
-      // jump straight back into the property-choice step.
+      const firstName = (auth.fullName || 'there').split(' ')[0];
       injectBotMessage(
-        "Great! Let's start a new application. Are you looking to take a loan against a property you already own, or are you looking to buy a new property using our loan?",
-        [
-          { label: 'I own a property', value: 'I own a property' },
-          { label: 'I want to buy a property', value: 'I want to buy a property' },
-        ]
+        `Let's start fresh! What would you like to do, ${firstName}?`,
+        LOAN_OPTIONS,
       );
     } else {
       setCurrentCreditScore(creditScore);
@@ -157,13 +188,10 @@ export default function App() {
   const showLoginGate = showAuthGate && auth.step !== 'authenticated' && auth.step !== 'financial_docs';
 
   const handleExistingStep2 = async (otp: string) => {
-    const nextMessage = await existingLoginStep2(otp);
-    if (nextMessage) {
-      injectBotMessage(nextMessage, [
-        { id: 'lap', label: 'I own a property' },
-        { id: 'home_loan', label: 'I want to buy a property' },
-      ]);
-    }
+    // Login completes here; the personalised greeting is injected by the
+    // prevCustomerIdRef effect once auth.customerId changes — no need to
+    // call injectBotMessage here (it would be wiped by resetChat() anyway).
+    await existingLoginStep2(otp);
   };
 
   const handleNewUserStep2 = async (otp: string) => {
@@ -234,6 +262,7 @@ export default function App() {
         token={auth.token}
         customerId={auth.customerId}
         onLoadConversation={handleLoadConversation}
+        onAdvisorClick={() => setAdvisorOpen(true)}
       />
 
       {/* Main chat area */}
@@ -247,6 +276,7 @@ export default function App() {
           customerId={auth.customerId}
           customerPhone={(auth.profile as any)?.phone}
           onNewApplication={handleNewApplication}
+          onOpenAdvisor={auth.step === 'authenticated' ? () => setAdvisorOpen(true) : undefined}
           userName={auth.fullName}
         />
         {auth.step === 'financial_docs' && (
@@ -283,6 +313,7 @@ export default function App() {
           value={inputValue}
           onChange={setInputValue}
           onSend={sendMessage}
+          placeholder={isWarmingUp ? 'Connecting...' : 'How can I help you?'}
         />
       </main>
 
@@ -295,6 +326,15 @@ export default function App() {
           sessionId={sessionId}
           token={auth.token}
           customerId={auth.customerId}
+        />
+      )}
+
+      {/* Financial Advisor panel — slide-in overlay, auth-gated */}
+      {advisorOpen && auth.token && (
+        <AdvisorPanel
+          sessionId={sessionId}
+          token={auth.token}
+          onClose={() => setAdvisorOpen(false)}
         />
       )}
     </div>

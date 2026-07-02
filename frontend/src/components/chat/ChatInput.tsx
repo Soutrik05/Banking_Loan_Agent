@@ -4,9 +4,10 @@ interface ChatInputProps {
   value: string;
   onChange: (val: string) => void;
   onSend: (val: string) => void;
+  placeholder?: string;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ value, onChange, onSend }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ value, onChange, onSend, placeholder = 'How can I help you?' }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
@@ -55,7 +56,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ value, onChange, onSend })
           value={value}
           onChange={e => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="How can I help you?"
+          placeholder={placeholder}
           className="flex-1 bg-transparent text-sm text-gray-700 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 outline-none font-medium"
         />
 

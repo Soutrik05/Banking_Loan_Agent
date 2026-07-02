@@ -106,6 +106,33 @@ def update_conversation_title(conversation_id: str, title: str):
     supabase.table("conversations").update({"title": title}).eq("id", conversation_id).execute()
 
 
+def _decision_title(d: dict) -> str:
+    """Build a concise conversation title from a loan decision card."""
+    decision = d.get("decision", "")
+    amount = d.get("loan_amount") or 0
+    flow = d.get("flow_type", "loan")
+    label = "LAP" if flow == "lap" else "Home Loan"
+    if decision == "approved":
+        return f"{label} Approved — Rs.{amount / 100000:.1f}L"
+    elif decision == "rejected":
+        return f"{label} Application — Declined"
+    return f"{label} Application — Review Pending"
+
+
+def save_loan_decision(session_id: str, decision_data: dict) -> None:
+    """Persist the loan decision card to the conversation row so the
+    sidebar can show a status badge and the title updates immediately
+    to reflect the outcome — no LLM call required."""
+    try:
+        title = _decision_title(decision_data)
+        supabase.table("conversations").update({
+            "loan_decision": decision_data,
+            "title": title,
+        }).eq("session_id", session_id).execute()
+    except Exception as e:
+        print(f"save_loan_decision error: {e}")
+
+
 def generate_conversation_title(messages: list, customer_name: str) -> str:
     """
     Short, descriptive sidebar title for any conversation — works for any
