@@ -721,7 +721,6 @@ interface ChatWindowProps {
   customerId: string | null;
   customerPhone?: string;
   onNewApplication?: () => void;
-  onOpenAdvisor?: () => void;
   userName?: string | null;
 }
 
@@ -838,7 +837,7 @@ function isGreetingMessage(msg: Message): boolean {
   );
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId, customerPhone, onNewApplication, onOpenAdvisor, userName }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWelcomeOption, sessionId, token, customerId, customerPhone, onNewApplication, userName }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   // Tracks whether the user has dismissed the post-decision advisor prompt
@@ -1078,8 +1077,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
                 <div className="pl-11 animate-fade-in">
                   <LoanDecisionCardFromMessage content={msg.content} />
                 </div>
-                {/* Advisor MCQ prompt — shown once, below the decision card, dismissed once opened */}
-                {onOpenAdvisor && !advisorPromptDismissed && (
+                {/* Advisor prompt — answers are sent as chat messages so the
+                    financial advisor continues IN the main chat (the graph's
+                    financial_advisor node handles "Yes, help me"/"No, thanks") */}
+                {!advisorPromptDismissed && (
                   <div className="pl-11 mt-3 animate-fade-in">
                     <div className="bg-violet-50/80 dark:bg-violet-950/30 border border-violet-100 dark:border-violet-900/40 rounded-2xl px-4 py-3 max-w-sm">
                       <p className="text-xs font-semibold text-violet-700 dark:text-violet-300 mb-2.5 flex items-center gap-1.5">
@@ -1090,13 +1091,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, onWe
                       </p>
                       <div className="flex gap-2">
                         <button
-                          onClick={() => { setAdvisorPromptDismissed(true); onOpenAdvisor(); }}
+                          onClick={() => { setAdvisorPromptDismissed(true); onWelcomeOption('Yes, help me'); }}
                           className="flex-1 text-[11px] font-bold text-white bg-gradient-to-tr from-violet-600 to-purple-500 hover:brightness-110 active:scale-[0.97] py-2 rounded-xl transition-all shadow-sm shadow-purple-500/15"
                         >
                           Yes, help me
                         </button>
                         <button
-                          onClick={() => setAdvisorPromptDismissed(true)}
+                          onClick={() => { setAdvisorPromptDismissed(true); onWelcomeOption('No, thanks'); }}
                           className="flex-1 text-[11px] font-bold text-violet-600 dark:text-violet-400 border border-violet-200 dark:border-violet-800/60 hover:bg-violet-50 dark:hover:bg-violet-900/20 py-2 rounded-xl transition-all"
                         >
                           No, thanks

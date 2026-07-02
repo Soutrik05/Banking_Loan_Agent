@@ -290,6 +290,18 @@ export const bookAppointment = async (data: {
 export const getAppointment = (sessionId: string, token: string) =>
   request('GET', `/appointments/${sessionId}?token=${encodeURIComponent(token)}`);
 
+// Most recent confirmed appointment for the token's customer, across all
+// sessions — survives New Application / page reload session rotation.
+export const getLatestAppointment = (token: string) =>
+  request('GET', `/appointments/latest?token=${encodeURIComponent(token)}`);
+
+// Most recent loan decision for the token's customer, across all sessions.
+export const getLatestLoanDecision = (token: string) =>
+  request<{ loan_decision: Record<string, unknown> | null }>(
+    'GET',
+    `/loan-decision/latest?token=${encodeURIComponent(token)}`
+  );
+
 export const cancelAppointment = (appointmentId: string, token: string) =>
   request<{ success: boolean; message: string }>(
     'POST',

@@ -48,6 +48,7 @@ customer — no extra chaining code needed.
 
 import json
 import operator
+import os
 import re
 from typing import Annotated, Literal, Optional, TypedDict
 
@@ -65,7 +66,7 @@ from agents.financial_document_agent import (
     is_awaiting_documents,
 )
 from session_store import (
-    get_session, mark_step,
+    get_session, mark_step, set_credit,
     get_customer_approved_emi, set_customer_approved_emi,
 )
 from database.appointments import get_appointment, cancel_appointment
@@ -74,6 +75,7 @@ from agents.property_valuation_agent import valuate_property
 from agents.risk_assessment_agent import assess_risk
 from agents.credit_assessment_agent import assess_credit
 from agents.loan_decision_agent import make_loan_decision
+from agents.financial_advisor_agent import get_financial_advice
 from prompts.router_prompt import ROUTER_SYSTEM_PROMPT, PROPERTY_QA_SYSTEM_PROMPT
 from utils.config import (
     AZURE_OPENAI_API_KEY,
@@ -102,6 +104,7 @@ class ChatState(TypedDict, total=False):
     stage: Literal[
         "new", "awaiting_property_choice", "awaiting_tie_up_choice", "lap_flow",
         "inventory_flow", "own_choice", "general",
+        "tie_ups_property_selected",
         "awaiting_acquisition_type",
         "awaiting_own_choice_address", "awaiting_own_choice_price",
         "property_document_requested", "property_verification", "property_valuation",
@@ -109,9 +112,14 @@ class ChatState(TypedDict, total=False):
         "awaiting_appointment_decision", "awaiting_appointment_form",
         "awaiting_cancel_confirmation",
         "awaiting_address_confirmation",
+        "awaiting_advisor_decision", "financial_advisor",
     ]
     shown_properties: list
     selected_property_id: Optional[str]
+    # Flow 2A (tie-ups): full properties.json record of the property the
+    # customer confirmed with "Continue with this" — the pre-verified
+    # valuation/eligibility figures come straight from this dict.
+    selected_property_data: Optional[dict]
     just_handled: bool  # set by authed_entry/kyc every turn; True only when the node produced the terminal reply itself
 
     # Own-choice (Flow 2B) property purchase details, collected via the
@@ -237,6 +245,47 @@ OWN_CHOICE_PRICE_TOO_HIGH = "For properties above ₹10 Crore, please visit our 
 OWN_CHOICE_PRICE_INVALID = "Sorry, I couldn't understand that price. Please enter it like '75 lakhs', '1.5 crore', or '2 Cr'."
 OWN_CHOICE_DOC_PROMPT = "Please upload these documents from the seller:"
 OWN_CHOICE_REQUIRED_DOCUMENTS = ["sale_deed", "encumbrance_certificate", "noc_builder"]
+
+# ---------------------------------------------------------------------------
+# Account-query and financial-advisor keyword detection — instant, checked
+# BEFORE the LLM router. Purely text-based, works for any customer.
+# ---------------------------------------------------------------------------
+
+ACCOUNT_QUERY_KEYWORDS = [
+    "my account", "bank account", "account number", "account details",
+    "loan status", "my loan", "loan details", "approved loan",
+    "when will i get", "disbursement", "money in bank",
+    "which account", "my emi", "how much emi",
+    "outstanding", "outstanding amount", "how much do i owe",
+    "my balance", "how much money",
+    "my fd", "fixed deposit", "my savings",
+    "tell about my bank", "accounts in your bank",
+    "my loan status",
+]
+
+FINANCIAL_ADVISOR_KEYWORDS = [
+    "fd", "break fd", "emi reduce", "prepay", "invest",
+    "cibil improve", "tenure", "save money", "afford",
+    "financial advice", "recommend", "suggest", "broke",
+    "need money", "help me financially",
+]
+
+ADVISOR_YES_LABELS = ("yes, help me", "yes help me")
+ADVISOR_NO_LABELS = ("no, thanks", "no thanks")
+
+POST_DECISION_ADVICE_PROMPT = "Would you like personalised financial recommendations?"
+POST_DECISION_ADVICE_OPTIONS = [
+    {"id": "advisor_yes", "label": "Yes, help me"},
+    {"id": "advisor_no", "label": "No, thanks"},
+]
+
+
+def _matches_keywords(message: str, keywords: list) -> bool:
+    """Word-boundary keyword match so short keywords like 'fd' don't fire
+    inside unrelated words. Case-insensitive, works on any message text."""
+    lower = (message or "").lower()
+    return any(re.search(r"\b" + re.escape(k), lower) for k in keywords)
+
 
 # Helper to restore UI elements based on state stage
 def resume_workflow(state: ChatState) -> dict:
@@ -512,6 +561,16 @@ def _authed_entry_node(state: ChatState) -> dict:
         }
 
     if stage == "new":
+        # Account/loan-status questions asked as the very first message
+        # must be ANSWERED, not swallowed by the welcome MCQ — fall through
+        # to routing (which sends them to account_query) without touching
+        # stage, so the property-choice question still fires later.
+        if _matches_keywords(message, ACCOUNT_QUERY_KEYWORDS):
+            return {
+                "customer_profile": profile,
+                "current_agent": "authed_entry_agent",
+                "just_handled": False,
+            }
         if mid_flow_message:
             # Don't touch stage at all — _route_after_entry's
             # registration_number short-circuit routes this correctly to
@@ -663,6 +722,200 @@ def _show_inventory_node(state: ChatState) -> dict:
         shown_properties=inv["properties"],
         flow_type="tie_ups",
         customer_profile=state.get("customer_profile")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Flow 2A — Our Tie-ups: property selection → eligibility → risk → credit →
+# decision. The bank pre-verified these properties, so there is no document
+# upload or registry verification step; eligibility comes straight from the
+# inventory record and auto-chains into the same risk/credit/decision
+# pipeline as Flow 1.
+# ---------------------------------------------------------------------------
+
+TIE_UPS_SELECTED_OPTIONS = [
+    {"label": "Check my eligibility", "value": "check eligibility"},
+    {"label": "Ask about property", "value": "ask property"},
+]
+
+TIE_UPS_QA_OPTIONS = [
+    {"label": "Yes, check eligibility", "value": "check eligibility"},
+]
+
+TIE_UPS_ELIGIBILITY_NUDGE = (
+    "\n\nWould you like to proceed with loan eligibility check for this property?"
+)
+
+TIE_UPS_ELIGIBILITY_YES = (
+    "check eligibility", "check my eligibility", "yes, check eligibility",
+    "yes check eligibility", "yes proceed", "yes, proceed", "yes",
+    "yes please", "proceed", "ok", "okay", "sure",
+)
+
+
+def _load_property(property_id: str) -> dict:
+    """Loads a single bank-inventory property record from properties.json.
+    Returns {} if the id is unknown or the file can't be read."""
+    path = os.path.join(os.path.dirname(__file__), "..", "mock_data", "properties.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("bank_inventory", {}).get(property_id, {})
+    except Exception:
+        return {}
+
+
+def _tie_ups_selected_node(state: ChatState) -> dict:
+    """User confirmed a tie-up property ("Continue with this" or a message
+    naming a BINV id) — instant, no LLM call. Stores the full property
+    record in state and offers Q&A / eligibility as the next step."""
+    message = state["message"]
+    session_id = state.get("session_id", "")
+
+    property_id = state.get("selected_property_id")
+    match = re.search(r"\b(binv\d{3})\b", message.lower())
+    if match:
+        property_id = match.group(1).upper()
+
+    prop = _load_property(property_id or "")
+    if not prop:
+        # No selection on record (e.g. checkpoint lost) — re-show the
+        # inventory so the customer can pick again.
+        return _show_inventory_node(state)
+
+    mark_step(session_id, "property", "completed")
+
+    reply = (
+        f"Great choice! Here's a summary of your selected property:\n\n"
+        f"**{prop.get('address', '')}**\n"
+        f"Area: {prop.get('area_sqft')} sqft | "
+        f"Price: Rs.{(prop.get('listed_price') or 0)/100000:.1f}L\n"
+        f"Down Payment: Rs.{(prop.get('down_payment_min') or 0)/100000:.1f}L | "
+        f"Max Loan: Rs.{(prop.get('max_loan_available') or 0)/100000:.1f}L\n\n"
+        f"Do you have any questions about this property, "
+        f"or shall we check your loan eligibility?"
+    )
+
+    return _make_node_output(
+        state, reply, "mcq", "tie_ups_property_selected", "tie_ups_agent",
+        options=TIE_UPS_SELECTED_OPTIONS,
+        selected_property_id=property_id,
+        shown_properties=state.get("shown_properties", []),
+        customer_profile=state.get("customer_profile"),
+        selected_property_data=prop,
+        flow_type="tie_ups",
+    )
+
+
+def _tie_ups_property_qa_node(state: ChatState) -> dict:
+    """Answers questions about the selected tie-up property using its full
+    properties.json record (amenities, transit, crime rate, possession
+    status, ...), then always nudges towards the eligibility check. Stage
+    stays "tie_ups_property_selected" so follow-up questions keep landing
+    here until the customer proceeds."""
+    message = state["message"]
+    prop = state.get("selected_property_data") or _load_property(
+        state.get("selected_property_id") or ""
+    )
+
+    if message.strip().lower() == "ask property":
+        # "Ask about property" button click — no question asked yet.
+        answer = "Sure — what would you like to know about this property?"
+    else:
+        try:
+            resp = _client.chat.completions.create(
+                model=CHAT_DEPLOYMENT,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"""You are Arjun, a senior relationship manager at a reputed Indian bank.
+
+The customer has selected the following property from our bank inventory:
+{json.dumps(prop, indent=2)}
+
+They are now asking a question about it (e.g., amenities, location, connectivity, crime rate, nearby schools, possession status, pricing, etc.).
+
+Guidelines:
+- Use ONLY the provided property JSON data for property-specific details (e.g. amenities, crime_rate, transit, nearby_schools, hospitals, possession_status, listed_price).
+- Translate the raw fields into clear, friendly qualitative explanations.
+- Be highly concise, direct, and professional.
+- Limit responses to 2-3 sentences.
+- Don't use markdown tables — plain conversational text only.""",
+                    },
+                    *state.get("chat_history", [])[-6:],
+                    {"role": "user", "content": message},
+                ],
+                temperature=0.3,
+            )
+            answer = resp.choices[0].message.content
+        except Exception as e:
+            answer = f"Sorry, I had trouble pulling that up: {e}"
+
+    return _make_node_output(
+        state, answer + TIE_UPS_ELIGIBILITY_NUDGE, "mcq",
+        "tie_ups_property_selected", "tie_ups_agent",
+        options=TIE_UPS_QA_OPTIONS,
+        selected_property_id=state.get("selected_property_id"),
+        shown_properties=state.get("shown_properties", []),
+        customer_profile=state.get("customer_profile"),
+        selected_property_data=prop,
+        flow_type="tie_ups",
+    )
+
+
+def _tie_ups_eligibility_node(state: ChatState) -> dict:
+    """Flow 2A eligibility — instant, no LLM call. The bank pre-verified
+    the tie-up property, so there's no document upload or registry check:
+    the valuation comes straight from the inventory record, and this node
+    unconditionally chains into risk assessment in the SAME turn (plain
+    edge below), exactly like the Flow 1 valuation nodes."""
+    session_id = state.get("session_id", "")
+    prop = state.get("selected_property_data") or _load_property(
+        state.get("selected_property_id") or ""
+    )
+
+    listed_price = prop.get("listed_price") or 0
+    max_loan = prop.get("max_loan_available") or 0
+    ltv_ratio = prop.get("ltv_ratio") or 0.80
+
+    valuation_result = {
+        "fair_market_value": listed_price,
+        "max_loan": max_loan,
+        "ltv_ratio": ltv_ratio,
+        "summary": (
+            f"✅ Bank pre-verified property. "
+            f"Max loan available: Rs.{max_loan/100000:.1f}L "
+            f"at {ltv_ratio*100:.0f}% LTV."
+        ),
+    }
+
+    # Synthetic verification result: the bank already holds this property
+    # in inventory, so it counts as verified. government_value carries the
+    # listed price so the loan decision card shows the property's actual
+    # price rather than a blank "Property Value".
+    verification_result = {
+        "verified": True,
+        "status": "approved",
+        "address": prop.get("address"),
+        "area_sqft": prop.get("area_sqft"),
+        "property_type": prop.get("property_type"),
+        "government_value": listed_price,
+        "summary": "Bank pre-verified tie-up property — no separate verification needed.",
+    }
+
+    mark_step(session_id, "property", "completed")
+    mark_step(session_id, "risk", "active", set_active=True)
+
+    return _make_node_output(
+        state, valuation_result["summary"], "valuation_result",
+        "property_valuation", "tie_ups_eligibility_agent",
+        metadata={"valuation_result": valuation_result},
+        customer_profile=state.get("customer_profile"),
+        selected_property_id=state.get("selected_property_id"),
+        selected_property_data=prop,
+        valuation_result=valuation_result,
+        property_verification_result=verification_result,
+        flow_type="tie_ups",
     )
 
 
@@ -1158,6 +1411,13 @@ def _credit_assessment_node(state: ChatState) -> dict:
 
     mark_step(session_id, "credit", "completed" if result.get("approved") else "failed")
 
+    # Sync the assessment's CIBIL score (from mock_cibil_api) into
+    # session_store so /session/status — and therefore the frontend
+    # sidebar's credit-score card — shows the SAME number and rating as
+    # the loan decision card, not a separately derived value.
+    if result.get("cibil_score"):
+        set_credit(session_id, result["cibil_score"], result.get("cibil_rating") or "Fair")
+
     prior_reply = state.get("reply") or ""
     combined_reply = f"{prior_reply}\n\n{result['summary']}" if prior_reply else result["summary"]
 
@@ -1202,9 +1462,19 @@ def _loan_decision_node(state: ChatState) -> dict:
             approved_emi = credit_result.get("monthly_emi_estimate") or 0
             set_customer_approved_emi(customer_id, approved_emi)
 
+    # Offer personalised financial advice as the next step. The offer is
+    # carried in metadata/options (NOT appended to the reply text — the
+    # frontend JSON.parses everything after the LOAN_DECISION_CARD: prefix,
+    # so extra text would break the card). Stage moves to
+    # "awaiting_advisor_decision" so the Yes/No answer routes instantly.
     return _make_node_output(
-        state, decision_result["summary"], "loan_decision", "general", "loan_decision_agent",
-        metadata={"valuation_result": state.get("valuation_result")},
+        state, decision_result["summary"], "loan_decision", "awaiting_advisor_decision",
+        "loan_decision_agent",
+        options=POST_DECISION_ADVICE_OPTIONS,
+        metadata={
+            "valuation_result": state.get("valuation_result"),
+            "post_decision_advice_prompt": POST_DECISION_ADVICE_PROMPT,
+        },
         customer_profile=state.get("customer_profile"),
         loan_decision_result=decision_result,
         display_card=decision_result.get("display_card"),
@@ -1430,17 +1700,11 @@ def _property_followup_node(state: ChatState) -> dict:
     shown_properties = state.get("shown_properties", [])
     selected_property_id = state.get("selected_property_id")
 
-    # 1. Handle "continue with this"
+    # 1. Handle "continue with this" — the tie-ups selection confirmation.
+    # Routing normally sends this straight to the tie_ups_selected node; this
+    # branch is a safety net in case the LLM router lands here instead.
     if lower == "continue with this" or lower == "continue" or lower == "proceed":
-        from session_store import mark_step
-        mark_step(session_id, "property", "completed")
-        mark_step(session_id, "risk", "active", set_active=True)
-        return _make_node_output(
-            state, "Woho! Great choice!", "text", "general", "property_followup_agent",
-            selected_property_id=selected_property_id,
-            shown_properties=shown_properties,
-            customer_profile=state.get("customer_profile")
-        )
+        return _tie_ups_selected_node(state)
 
     # 2. Handle database location question
     if lower == "where is the property database located?" or (
@@ -1631,6 +1895,219 @@ def _faq_node(state: ChatState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Account / loan-status queries — answered with the customer's REAL data
+# ---------------------------------------------------------------------------
+
+def _get_account_summary(customer_id: str) -> dict:
+    """Pulls the customer's live account, income, and loan data from the
+    database — works for any authenticated customer, nothing hardcoded."""
+    from database.init_db import get_connection
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT full_name, account_numbers, monthly_income, avg_monthly_balance,
+                   customer_segment, employer_name
+            FROM bank_customers WHERE customer_id = ?
+            """,
+            (customer_id,),
+        )
+        row = cursor.fetchone()
+
+        cursor.execute(
+            """
+            SELECT loan_id, loan_type, outstanding_amount, emi, next_emi_date, status
+            FROM existing_loans WHERE customer_id = ?
+            """,
+            (customer_id,),
+        )
+        loans = [dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    profile = dict(row) if row else {}
+    raw_accounts = profile.get("account_numbers") or ""
+    try:
+        accounts = json.loads(raw_accounts) if raw_accounts else []
+        if not isinstance(accounts, list):
+            accounts = [str(accounts)]
+    except Exception:
+        accounts = [a.strip() for a in raw_accounts.split(",") if a.strip()]
+
+    return {"profile": profile, "accounts": accounts, "loans": loans}
+
+
+def _account_query_node(state: ChatState) -> dict:
+    """Answers questions about the customer's own bank accounts, existing
+    loans, EMIs, and disbursement — grounded in their real database rows
+    plus any loan approved earlier in this session. LLM phrases the answer
+    to the user's specific question; falls back to a plain data summary if
+    the LLM call fails. Stage is left untouched so any in-progress flow
+    resumes naturally afterwards."""
+    message = state["message"]
+    stage = state.get("stage", "general")
+    user_context = state.get("user_context") or {}
+    customer_id = user_context.get("customer_id")
+
+    if not customer_id:
+        return _make_node_output(
+            state, "Please log in so I can look up your account details.",
+            "text", stage, "account_query_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    data = _get_account_summary(customer_id)
+    profile = data["profile"]
+    accounts = data["accounts"]
+    loans = data["loans"]
+
+    sb_accounts = [a for a in accounts if not str(a).upper().startswith("FD")]
+    fd_accounts = [a for a in accounts if str(a).upper().startswith("FD")]
+
+    loan_lines = "\n".join(
+        f"  - {l.get('loan_type', 'Loan')} (ID {l.get('loan_id', '?')}): "
+        f"EMI Rs.{(l.get('emi') or 0):,.0f}/month, "
+        f"Outstanding Rs.{(l.get('outstanding_amount') or 0):,.0f}, "
+        f"Status: {l.get('status', 'active')}"
+        for l in loans
+    ) if loans else "  No existing loans on record."
+
+    decision_result = state.get("loan_decision_result") or {}
+    card = decision_result.get("display_card") or {}
+    if card:
+        session_loan = (
+            f"Decision: {str(card.get('decision', 'N/A')).upper()}\n"
+            f"Approved Amount: Rs.{(card.get('loan_amount') or 0):,.0f}\n"
+            f"Interest Rate: {card.get('interest_rate', '—')}%\n"
+            f"Monthly EMI: Rs.{(card.get('monthly_emi') or 0):,.0f}"
+        )
+    else:
+        session_loan = "No loan application decided in this session yet."
+
+    system_prompt = f"""You are Arjun, a helpful relationship manager at National Bank.
+You have full access to this customer's bank data.
+Answer their specific question using real numbers.
+NEVER say you don't have access to account details.
+
+Customer: {profile.get('full_name', 'Customer')}
+Savings Accounts: {', '.join(str(a) for a in sb_accounts) if sb_accounts else 'None on record'}
+Fixed Deposits: {', '.join(str(a) for a in fd_accounts) if fd_accounts else 'None on record'}
+Average Monthly Balance: Rs.{(profile.get('avg_monthly_balance') or 0):,.0f}
+Monthly Income: Rs.{(profile.get('monthly_income') or 0):,.0f}
+Employer: {profile.get('employer_name') or 'Not on record'}
+Active Loans: {loan_lines}
+Customer Segment: {profile.get('customer_segment') or 'standard'}
+
+THIS SESSION'S LOAN APPLICATION
+{session_loan}
+
+GUIDELINES
+- Answer the question directly and specifically in 2-4 sentences, using
+  ONLY the real data above — never invent figures or account numbers.
+- For "when will I get the money" / disbursement questions: after final
+  approval and document submission, disbursement typically takes 7-10
+  working days, credited to their savings account (name the actual account
+  number if one exists).
+- For "which account" questions: state their actual account numbers.
+- Use Rs. for all amounts with the real figures above."""
+
+    try:
+        resp = _client.chat.completions.create(
+            model=CHAT_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message},
+            ],
+            max_tokens=250,
+            temperature=0.3,
+        )
+        reply = resp.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Account query LLM failed: {e}")
+        reply = (
+            f"Here's what I have on file for you:\n\n"
+            f"**Accounts:** {', '.join(str(a) for a in accounts) if accounts else 'None on record'}\n"
+            f"**Existing loans:**\n{loan_lines}\n\n"
+            + (
+                f"**This session:** loan {str(card.get('decision', '')).upper()} — "
+                f"₹{(card.get('loan_amount') or 0):,.0f} at {card.get('interest_rate', '—')}%, "
+                f"EMI ₹{(card.get('monthly_emi') or 0):,.0f}/month."
+                if card else "No loan application decided in this session yet."
+            )
+        )
+
+    # Preserve whatever stage the customer was at — never reset to
+    # "awaiting_property_choice" or re-show the property-choice buttons.
+    # At the start of the flow, just append a gentle loan-application nudge.
+    if stage in ("awaiting_property_choice", "new"):
+        reply += (
+            "\n\nIs there anything else I can help you with "
+            "regarding your loan application?"
+        )
+
+    return _make_node_output(
+        state, reply, "text", stage, "account_query_agent",
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Financial advisor in main chat
+# ---------------------------------------------------------------------------
+
+def _financial_advisor_node(state: ChatState) -> dict:
+    """Routes the customer's question to the LLM financial advisor with
+    their full live financial context plus this session's loan decision.
+    Reached via the post-decision "Yes, help me" button or financial-advice
+    keywords typed at any stage. Sets stage to "financial_advisor" so every
+    follow-up message keeps going to the advisor until a loan-flow route
+    takes over. Works for any customer — nothing hardcoded."""
+    message = state["message"]
+    lower = message.strip().lower()
+    user_context = state.get("user_context") or {}
+    customer_id = user_context.get("customer_id")
+
+    if not customer_id:
+        return _make_node_output(
+            state,
+            "Please log in so I can access your financial profile and give personalised advice.",
+            "text", state.get("stage", "general"), "financial_advisor_agent",
+            customer_profile=state.get("customer_profile"),
+        )
+
+    if lower in ADVISOR_YES_LABELS:
+        advisor_message = (
+            "Please give me personalised financial recommendations based on my "
+            "current financial situation and my recent loan decision."
+        )
+    else:
+        advisor_message = message
+
+    reply = get_financial_advice(
+        customer_id,
+        advisor_message,
+        state.get("chat_history", []),
+        state.get("loan_decision_result"),
+    )
+
+    return _make_node_output(
+        state, reply, "text", "financial_advisor", "financial_advisor_agent",
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+def _advisor_decline_node(state: ChatState) -> dict:
+    """User clicked "No, thanks" on the post-decision advisor offer —
+    instant, no LLM call."""
+    return _make_node_output(
+        state, "No problem! Feel free to ask me for financial advice anytime.",
+        "text", "general", "financial_advisor_agent",
+        customer_profile=state.get("customer_profile"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Routing
 # ---------------------------------------------------------------------------
 
@@ -1643,6 +2120,21 @@ def _route_entry(state: ChatState) -> str:
     # checkpointed loan_decision_result, which is what clears this.
     decision_result = state.get("loan_decision_result")
     if decision_result and decision_result.get("decision") == "approved":
+        # Post-decision follow-ups are the one exception: the advisor
+        # yes/no answer, an ongoing advisor conversation, or an account /
+        # loan-status / financial-advice question should still be answered
+        # rather than met with the "already approved" wall.
+        message = state.get("message", "")
+        lower = message.strip().lower()
+        is_followup = (
+            state.get("stage") in ("awaiting_advisor_decision", "financial_advisor")
+            or lower in ADVISOR_YES_LABELS
+            or lower in ADVISOR_NO_LABELS
+            or _matches_keywords(message, ACCOUNT_QUERY_KEYWORDS)
+            or _matches_keywords(message, FINANCIAL_ADVISOR_KEYWORDS)
+        )
+        if is_followup and state.get("user_context") is not None:
+            return "authed"
         return "loan_already_approved"
     if state.get("user_context") is not None:
         return "authed"
@@ -1679,12 +2171,29 @@ INSTANT_ROUTES = {
     "it was gifted to me": ("awaiting_acquisition_type", "set_document_requirements"),
     "our tie-ups": ("home_loan", "tie_ups"),
     "my own choice": ("own_choice", "own_choice"),
+    "yes, help me": ("awaiting_advisor_decision", "financial_advisor"),
+    # Flow 2A tie-ups pipeline buttons — stage-strict (see below) so e.g.
+    # "check eligibility" typed in an unrelated flow falls through to
+    # normal routing instead of hijacking the turn.
+    "continue with this": ("inventory_flow", "tie_ups_selected"),
+    "check eligibility": ("tie_ups_property_selected", "tie_ups_eligibility"),
+    "check my eligibility": ("tie_ups_property_selected", "tie_ups_eligibility"),
+    "ask property": ("tie_ups_property_selected", "tie_ups_property_qa"),
+}
+
+# Keys in INSTANT_ROUTES that only fire when the persisted stage matches the
+# expected one — all other keys route regardless of stage (button clicked
+# from an older turn should still work).
+_STAGE_STRICT_ROUTES = {
+    "continue with this", "check eligibility", "check my eligibility", "ask property",
 }
 
 def _should_fast_route(message: str, stage: str) -> str | None:
     key = message.strip().lower()
     if key in INSTANT_ROUTES:
         expected_stage, target_node = INSTANT_ROUTES[key]
+        if key in _STAGE_STRICT_ROUTES and stage != expected_stage:
+            return None
         # Allow if stage matches OR stage is close enough
         return target_node
     return None
@@ -1698,6 +2207,13 @@ def _route_after_entry(state: ChatState) -> str:
     stage = state.get("stage", "general")
     message = state["message"]
 
+    # Account / loan-status / EMI / disbursement questions — the very
+    # first check after authentication, BEFORE any stage handling or FAQ
+    # routing, so no other node can intercept them with a generic "I don't
+    # have access" answer. Answered with the customer's REAL database data.
+    if _matches_keywords(message, ACCOUNT_QUERY_KEYWORDS):
+        return "account_query"
+
     # Check fast path before any LLM call
     fast_node = _should_fast_route(message, stage)
     if fast_node is not None:
@@ -1710,6 +2226,15 @@ def _route_after_entry(state: ChatState) -> str:
         return "own_choice_price"
     if stage == "awaiting_own_choice_price":
         return "own_choice_price_parser"
+
+    # Flow 2A tie-ups: a property has been selected — either the customer
+    # proceeds to the eligibility check (button or a plain "yes"), or
+    # anything else is treated as a question about the selected property.
+    if stage == "tie_ups_property_selected":
+        tie_lower = message.strip().lower()
+        if tie_lower in TIE_UPS_ELIGIBILITY_YES:
+            return "tie_ups_eligibility"
+        return "tie_ups_property_qa"
 
     # Appointment cancellation confirmation — instant, no LLM.
     if stage == "awaiting_cancel_confirmation":
@@ -1734,6 +2259,15 @@ def _route_after_entry(state: ChatState) -> str:
         if state.get("flow_type") == "own_choice":
             return "own_choice_verification"
         return "property_verification"
+
+    # Post-decision advisor offer — instant yes/no detection, no LLM.
+    # Anything that isn't a clear yes/no falls through to normal routing
+    # (so an account/advice question asked here still gets answered).
+    if stage == "awaiting_advisor_decision":
+        if lower in ADVISOR_YES_LABELS or lower in ("yes", "sure", "okay", "ok", "yes please"):
+            return "financial_advisor"
+        if lower in ADVISOR_NO_LABELS or lower in ("no", "nope", "not now"):
+            return "advisor_decline"
 
     # "How did you acquire this property?" answer — only steal the turn if
     # the message actually looks like one of the three acquisition choices;
@@ -1768,10 +2302,10 @@ def _route_after_entry(state: ChatState) -> str:
     if re.match(r'^binv\d{3}$', lower):
         return "property_followup"
 
-    # Stage-aware Continue matching
+    # Stage-aware Continue matching — confirming a tie-up property selection.
     if lower == "continue with this" or lower == "continue" or lower == "proceed":
         if stage == "inventory_flow":
-            return "property_followup"
+            return "tie_ups_selected"
 
     # Welcome MCQ selections
     if stage == "awaiting_property_choice":
@@ -1805,6 +2339,17 @@ def _route_after_entry(state: ChatState) -> str:
         if stage == "awaiting_tie_up_choice":
             return "own_choice"
 
+    # Ongoing financial-advisor conversation: every message keeps going to
+    # the advisor UNLESS a loan-flow route already claimed it above.
+    if stage == "financial_advisor":
+        return "financial_advisor"
+
+    # (Account-query keywords are handled at the very top of this router.)
+
+    # Financial-advice keywords work from ANY stage.
+    if _matches_keywords(message, FINANCIAL_ADVISOR_KEYWORDS):
+        return "financial_advisor"
+
     # 2. FALLBACK: Route using LLM classifier
     label = _route_stage_label(message, stage)
     if label == "property_followup" and stage != "inventory_flow":
@@ -1833,6 +2378,9 @@ _graph.add_node("lap", _lap_node)
 _graph.add_node("home_loan", _home_loan_node)
 _graph.add_node("explain_choice", _explain_choice_node)
 _graph.add_node("show_inventory", _show_inventory_node)
+_graph.add_node("tie_ups_selected", _tie_ups_selected_node)
+_graph.add_node("tie_ups_property_qa", _tie_ups_property_qa_node)
+_graph.add_node("tie_ups_eligibility", _tie_ups_eligibility_node)
 _graph.add_node("own_choice", _own_choice_node)
 _graph.add_node("own_choice_address", _own_choice_address_node)
 _graph.add_node("own_choice_price", _own_choice_price_node)
@@ -1855,6 +2403,9 @@ _graph.add_node("cancel_appointment", _cancel_appointment_node)
 _graph.add_node("cancel_appointment_decision", _cancel_appointment_decision_node)
 _graph.add_node("address_confirm_doc", _address_confirm_doc_node)
 _graph.add_node("address_reenter", _address_reenter_node)
+_graph.add_node("account_query", _account_query_node)
+_graph.add_node("financial_advisor", _financial_advisor_node)
+_graph.add_node("advisor_decline", _advisor_decline_node)
 
 _graph.add_conditional_edges(
     START, _route_entry,
@@ -1881,6 +2432,9 @@ _graph.add_conditional_edges(
         "explain_choice": "explain_choice",
         "show_inventory": "show_inventory",
         "tie_ups": "show_inventory",
+        "tie_ups_selected": "tie_ups_selected",
+        "tie_ups_property_qa": "tie_ups_property_qa",
+        "tie_ups_eligibility": "tie_ups_eligibility",
         "own_choice": "own_choice",
         "own_choice_address": "own_choice_address",
         "own_choice_price": "own_choice_price",
@@ -1897,6 +2451,9 @@ _graph.add_conditional_edges(
         "cancel_appointment_decision": "cancel_appointment_decision",
         "address_confirm_doc": "address_confirm_doc",
         "address_reenter": "address_reenter",
+        "account_query": "account_query",
+        "financial_advisor": "financial_advisor",
+        "advisor_decline": "advisor_decline",
     },
 )
 
@@ -1974,6 +2531,12 @@ _graph.add_conditional_edges(
     {"own_choice_valuation": "own_choice_valuation", "end": END},
 )
 _graph.add_edge("own_choice_valuation", "risk_assessment")
+# Flow 2A tie-ups: selection and Q&A are terminal for their turn; the
+# eligibility node auto-chains straight into the shared risk → credit →
+# decision pipeline in the SAME turn, exactly like the valuation nodes.
+_graph.add_edge("tie_ups_selected", END)
+_graph.add_edge("tie_ups_property_qa", END)
+_graph.add_edge("tie_ups_eligibility", "risk_assessment")
 _graph.add_conditional_edges(
     "risk_assessment", _route_after_risk,
     {"credit_assessment": "credit_assessment", "end": END},
@@ -1997,6 +2560,9 @@ _graph.add_conditional_edges(
     {"own_choice_valuation": "own_choice_valuation", "end": END},
 )
 _graph.add_edge("address_reenter", END)
+_graph.add_edge("account_query", END)
+_graph.add_edge("financial_advisor", END)
+_graph.add_edge("advisor_decline", END)
 _graph.add_edge("property_document_upload", END)
 _graph.add_edge("home_loan", END)
 _graph.add_edge("explain_choice", END)
@@ -2038,7 +2604,14 @@ def is_unsupported_loan(message: str) -> bool:
 
 
 def run_chat_graph(message: str, session_id: str, user_context: Optional[dict]) -> dict:
-    if is_unsupported_loan(message):
+    # Financial-advice and account questions may legitimately mention words
+    # from the unsupported-loan list (e.g. "personal financial advice",
+    # "should I invest in gold?") — let those through to the graph.
+    is_advice_or_account_query = _matches_keywords(
+        message, FINANCIAL_ADVISOR_KEYWORDS
+    ) or _matches_keywords(message, ACCOUNT_QUERY_KEYWORDS)
+
+    if is_unsupported_loan(message) and not is_advice_or_account_query:
         return {
             "reply": "Hi there! 👋 I'm Arjun, your dedicated relationship manager. Please note that BankWise AI currently only supports Home Loans and Loans Against Property (LAP). We don't support other loan products (like car, personal, or education loans) at this time, but I'd be glad to assist you with your home loan needs!",
             "type": "text",

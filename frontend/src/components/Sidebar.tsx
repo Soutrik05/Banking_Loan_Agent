@@ -38,7 +38,6 @@ interface SidebarProps {
   token: string | null;
   customerId: string | null;
   onLoadConversation: (messages: Message[], conversationId: string, sessionId: string | null) => void;
-  onAdvisorClick?: () => void;
 }
 
 function formatConversationDate(iso: string): string {
@@ -483,7 +482,7 @@ const EMICalculatorSection: React.FC = () => {
 export const Sidebar: React.FC<SidebarProps> = ({
   interestRates, loanTypes, onNewApplication,
   isAuthenticated, userName, onLoginClick, onLogoutClick, accountNumbers,
-  theme, onToggleTheme, token, customerId, onLoadConversation, onAdvisorClick,
+  theme, onToggleTheme, token, customerId, onLoadConversation,
 }) => {
   const [width, setWidth] = useState(288); // 72 tailwind = 288px
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -563,31 +562,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <div className="flex-1 overflow-y-auto px-4 py-6 space-y-1">
       {/* New Application CTA */}
       <NewApplicationButton onClick={onNewApplication} />
-
-      {/* Financial Advisor — authenticated only */}
-      {isAuthenticated && onAdvisorClick && (
-        <div className="mb-1">
-          <button
-            onClick={() => {
-              localStorage.setItem('bw_advisor_seen', '1');
-              onAdvisorClick();
-            }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all text-left relative overflow-hidden group text-gray-500 dark:text-gray-400 hover:bg-violet-50/50 dark:hover:bg-violet-900/20 hover:text-violet-700 dark:hover:text-violet-300 border border-transparent hover:border-violet-100 dark:hover:border-violet-800/40"
-          >
-            <span className="text-violet-500 dark:text-violet-400 group-hover:text-violet-600 dark:group-hover:text-violet-300 transition-colors">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-              </svg>
-            </span>
-            <span className="flex-1 z-10">Financial Advisor</span>
-            {typeof window !== 'undefined' && !localStorage.getItem('bw_advisor_seen') && (
-              <span className="z-10 text-[9px] font-extrabold bg-violet-500 text-white px-1.5 py-0.5 rounded-md uppercase tracking-wide flex-shrink-0">
-                NEW
-              </span>
-            )}
-          </button>
-        </div>
-      )}
 
       <ApplicationHistorySection
         isAuthenticated={isAuthenticated}

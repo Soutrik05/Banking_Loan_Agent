@@ -133,6 +133,27 @@ def save_loan_decision(session_id: str, decision_data: dict) -> None:
         print(f"save_loan_decision error: {e}")
 
 
+def get_loan_decision_by_customer(customer_id: str) -> Optional[dict]:
+    """Most recent loan decision for a customer, across ALL their
+    conversations/sessions. None if they've never reached a decision."""
+    try:
+        res = (
+            supabase.table("conversations")
+            .select("loan_decision, title, updated_at")
+            .eq("customer_id", customer_id)
+            .not_.is_("loan_decision", "null")
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return res.data[0].get("loan_decision")
+        return None
+    except Exception as e:
+        print(f"get_loan_decision error: {e}")
+        return None
+
+
 def generate_conversation_title(messages: list, customer_name: str) -> str:
     """
     Short, descriptive sidebar title for any conversation — works for any

@@ -52,6 +52,26 @@ def get_appointment(session_id: str) -> dict | None:
         return None
 
 
+def get_latest_appointment_by_customer(customer_id: str) -> dict | None:
+    """Most recent CONFIRMED appointment for a customer, regardless of
+    which session booked it. Cancelled appointments are filtered out by
+    the status predicate, so callers can show the result directly."""
+    try:
+        res = (
+            supabase.table("appointments")
+            .select("*")
+            .eq("customer_id", customer_id)
+            .eq("status", "confirmed")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception as e:
+        print(f"get_latest_appointment error: {e}")
+        return None
+
+
 def get_appointment_by_id(appointment_id: str) -> dict | None:
     """Looked up before cancelling — lets the caller verify the
     appointment actually belongs to whoever is requesting the

@@ -5,7 +5,7 @@ import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatInput } from './components/chat/ChatInput';
 import { LoginPage } from './pages/LoginPage';
 import { FileUploader } from './components/FileUploader';
-import { AdvisorPanel } from './components/AdvisorPanel';
+import { checkSession } from './services/api';
 import { useChat } from './hooks/useChat';
 import { useAuth } from './hooks/useAuth';
 import { useTheme } from './hooks/useTheme';
@@ -44,6 +44,10 @@ export default function App() {
   } = useAuth(sessionId);
 
   const [currentCreditScore, setCurrentCreditScore] = useState<CreditScore>(creditScore);
+  // The customer's REAL CIBIL score (mock_cibil_api via /auth/session),
+  // fetched once per login. Used as the baseline the credit-score card
+  // resets to on New Application, instead of the hardcoded appState value.
+  const cibilBaselineRef = useRef<CreditScore | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   // Warmup ping — wakes up Render's cold-start container so the user's
@@ -63,6 +67,33 @@ export default function App() {
     });
   };
 
+  // Fetch the customer's real CIBIL score the moment they're authenticated
+  // (and again if a different customer logs in on this tab), so the credit
+  // score card is correct from login — not only after a credit assessment.
+  useEffect(() => {
+    if (auth.step !== 'authenticated' || !auth.token) {
+      cibilBaselineRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    checkSession(auth.token)
+      .then((res: any) => {
+        if (cancelled) return;
+        const p = res?.profile;
+        if (p?.cibil_score) {
+          const score: CreditScore = {
+            value: p.cibil_score,
+            max: 900,
+            label: p.cibil_rating || (p.cibil_score >= 750 ? 'Excellent' : p.cibil_score >= 700 ? 'Good' : 'Fair'),
+          };
+          cibilBaselineRef.current = score;
+          setCurrentCreditScore(score);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [auth.step, auth.token, auth.customerId]);
+
   // Poll backend session status — only the credit score is still relevant
   // to the UI now that the right panel shows accounts/loans instead of the
   // workflow timeline.
@@ -71,7 +102,7 @@ export default function App() {
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/session/status?session_id=${sessionId}`);
+        const res = await fetch(`${API_BASE}/session/status?session_id=${sessionId}`);
         if (!res.ok) return;
         const data = await res.json();
 
@@ -95,9 +126,6 @@ export default function App() {
     const interval = setInterval(pollStatus, 15000);
     return () => clearInterval(interval);
   }, [auth.step, sessionId]);
-
-  // Financial Advisor panel — separate from the main loan chat
-  const [advisorOpen, setAdvisorOpen] = useState(false);
 
   // Guest browsing: the login screen only shows when explicitly triggered —
   // either the user clicks Sign In, or the orchestrator detects loan intent
@@ -154,6 +182,11 @@ export default function App() {
       setSessionId(crypto.randomUUID());
       resetChat();
       setInitialMessages(undefined);
+      // A different customer just logged in — their real CIBIL is fetched
+      // by the checkSession effect above; show the placeholder only until
+      // that lands (the baseline ref still holds the PREVIOUS customer's
+      // score at this instant, so it must not be used here).
+      cibilBaselineRef.current = null;
       setCurrentCreditScore(creditScore);
       // Inject personalised time-based greeting immediately so the chat
       // viewport opens straight away instead of the landing page.
@@ -174,7 +207,9 @@ export default function App() {
     setInitialMessages(undefined);
 
     if (auth.token) {
-      setCurrentCreditScore(creditScore);
+      // Reset to the SAME customer's real CIBIL baseline (not the hardcoded
+      // placeholder) — New Application doesn't change who's logged in.
+      setCurrentCreditScore(cibilBaselineRef.current ?? creditScore);
       const firstName = (auth.fullName || 'there').split(' ')[0];
       injectBotMessage(
         `Let's start fresh! What would you like to do, ${firstName}?`,
@@ -262,7 +297,6 @@ export default function App() {
         token={auth.token}
         customerId={auth.customerId}
         onLoadConversation={handleLoadConversation}
-        onAdvisorClick={() => setAdvisorOpen(true)}
       />
 
       {/* Main chat area */}
@@ -276,7 +310,6 @@ export default function App() {
           customerId={auth.customerId}
           customerPhone={(auth.profile as any)?.phone}
           onNewApplication={handleNewApplication}
-          onOpenAdvisor={auth.step === 'authenticated' ? () => setAdvisorOpen(true) : undefined}
           userName={auth.fullName}
         />
         {auth.step === 'financial_docs' && (
@@ -326,15 +359,6 @@ export default function App() {
           sessionId={sessionId}
           token={auth.token}
           customerId={auth.customerId}
-        />
-      )}
-
-      {/* Financial Advisor panel — slide-in overlay, auth-gated */}
-      {advisorOpen && auth.token && (
-        <AdvisorPanel
-          sessionId={sessionId}
-          token={auth.token}
-          onClose={() => setAdvisorOpen(false)}
         />
       )}
     </div>

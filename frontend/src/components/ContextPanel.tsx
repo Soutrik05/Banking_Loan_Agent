@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { CreditScore, CustomerProfile, Appointment } from '../types';
 import { CreditScoreCard } from './cards/CreditScoreCard';
-import { getAppointment, cancelAppointment } from '../services/api';
+import { getLatestAppointment, getLatestLoanDecision, cancelAppointment } from '../services/api';
 
 interface ContextPanelProps {
   profile: CustomerProfile | null;
@@ -171,31 +171,104 @@ const AppointmentBox: React.FC<{
   );
 };
 
-export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore, creditRating, sessionId, token, customerId }) => {
+interface LatestLoanDecision {
+  decision?: string;
+  loan_amount?: number | null;
+  interest_rate?: number | null;
+  monthly_emi?: number | null;
+  flow_type?: string | null;
+}
+
+const LatestLoanSection: React.FC<{ loan: LatestLoanDecision }> = ({ loan }) => {
+  const decision = (loan.decision || '').toLowerCase();
+  const badge =
+    decision === 'approved'
+      ? { text: '✅ Approved', cls: 'bg-emerald-50 dark:bg-emerald-400/10 text-emerald-600 dark:text-emerald-400' }
+      : decision === 'rejected'
+        ? { text: '❌ Declined', cls: 'bg-red-50 dark:bg-red-400/10 text-red-600 dark:text-red-400' }
+        : { text: '⚠️ Review', cls: 'bg-amber-50 dark:bg-amber-400/10 text-amber-600 dark:text-amber-400' };
+
+  return (
+    <SectionCard title="Latest Loan">
+      <div className="space-y-2 text-xs">
+        <div className="flex justify-between gap-3 items-center">
+          <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Decision</span>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex-shrink-0 ${badge.cls}`}>{badge.text}</span>
+        </div>
+        {!!loan.loan_amount && (
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Amount</span>
+            <span className="font-bold text-gray-800 dark:text-gray-100">
+              ₹{(loan.loan_amount / 100000).toFixed(1)}L
+            </span>
+          </div>
+        )}
+        {!!loan.interest_rate && (
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Rate</span>
+            <span className="font-bold text-gray-800 dark:text-gray-100">{loan.interest_rate}%</span>
+          </div>
+        )}
+        {!!loan.monthly_emi && (
+          <div className="flex justify-between gap-3">
+            <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">EMI</span>
+            <span className="font-bold text-rose-600 dark:text-rose-400">{formatINR(loan.monthly_emi)}/month</span>
+          </div>
+        )}
+      </div>
+    </SectionCard>
+  );
+};
+
+export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore, creditRating, token, customerId }) => {
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
   const [selectedLoan, setSelectedLoan] = useState<any | null>(null);
   const [width, setWidth] = useState(288);
   const [appointment, setAppointment] = useState<Appointment | null>(null);
+  const [latestLoan, setLatestLoan] = useState<LatestLoanDecision | null>(null);
+
+  // Latest loan decision for THIS customer, across all sessions — persists
+  // through New Application clicks and page reloads. Cleared synchronously
+  // on customer change so one customer's decision never flashes on another
+  // customer's panel.
+  useEffect(() => {
+    setLatestLoan(null);
+    if (!token || !customerId) return;
+    let isMounted = true;
+    const fetchLoan = () => {
+      getLatestLoanDecision(token)
+        .then(res => {
+          if (!isMounted) return;
+          setLatestLoan((res?.loan_decision as LatestLoanDecision | null) ?? null);
+        })
+        .catch(() => {});
+    };
+    fetchLoan();
+    const interval = setInterval(fetchLoan, 30000);
+    return () => { isMounted = false; clearInterval(interval); };
+  }, [token, customerId]);
 
   useEffect(() => {
-    // Clear FIRST, synchronously, before fetching — a new sessionId (fresh
-    // login, or "New Application") must never keep showing the PREVIOUS
-    // session's appointment box while the new fetch is in flight, and if
-    // this session simply has no appointment, the box must stay hidden
+    // Clear FIRST, synchronously, before fetching — a different customer
+    // logging in on the same tab must never keep seeing the PREVIOUS
+    // customer's appointment box while the new fetch is in flight, and if
+    // this customer simply has no appointment, the box must stay hidden
     // rather than showing whatever was here before.
     setAppointment(null);
 
-    if (!sessionId || !token) {
+    if (!token || !customerId) {
       return;
     }
     let isMounted = true;
     const fetchAppointment = () => {
-      getAppointment(sessionId, token)
+      // Latest CONFIRMED appointment for this customer across ALL sessions
+      // — a "New Application" click (which rotates sessionId) or a page
+      // reload no longer hides an appointment booked in an earlier session.
+      // Cancelled appointments are filtered out server-side, so nothing is
+      // shown once one is cancelled (belt-and-braces status check kept).
+      getLatestAppointment(token)
         .then((res: any) => {
           if (!isMounted) return;
-          // get_appointment() returns the most recent row for this session
-          // regardless of status — a cancelled appointment (e.g. cancelled
-          // via the chat flow) must not be displayed as if still upcoming.
           const fetched = res?.appointment ?? null;
           setAppointment(fetched && fetched.status !== 'cancelled' ? fetched : null);
         })
@@ -203,12 +276,12 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore
     };
     fetchAppointment();
     // Booking happens inline in the chat (AppointmentFormCard), with no
-    // direct callback into this sibling panel — poll so a freshly booked
-    // appointment shows up here without requiring a page reload, same
-    // pattern as the credit-score poll in App.tsx.
-    const interval = setInterval(fetchAppointment, 8000);
+    // direct callback into this sibling panel — silently refresh every
+    // 30 seconds so a freshly booked appointment shows up here without
+    // requiring a page reload.
+    const interval = setInterval(fetchAppointment, 30000);
     return () => { isMounted = false; clearInterval(interval); };
-  }, [sessionId, token, customerId]);
+  }, [token, customerId]);
 
   const startResizing = React.useCallback((mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
@@ -326,6 +399,9 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({ profile, creditScore
           onCancelled={() => setAppointment(null)}
         />
       )}
+
+      {/* Latest loan decision — persists across sessions / New Application */}
+      {latestLoan?.decision && <LatestLoanSection loan={latestLoan} />}
 
       {/* Active Loans & EMI */}
       <SectionCard title="Active Loans & EMI">

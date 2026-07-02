@@ -47,9 +47,16 @@ from database.conversations import (
     update_conversation_title,
     generate_conversation_title,
     save_loan_decision,
+    get_loan_decision_by_customer,
 )
 from database.document_store import upload_property_document, get_property_documents
-from database.appointments import create_appointment, get_appointment, cancel_appointment, get_appointment_by_id
+from database.appointments import (
+    create_appointment,
+    get_appointment,
+    cancel_appointment,
+    get_appointment_by_id,
+    get_latest_appointment_by_customer,
+)
 from services.ocr_service import extract_sale_deed_fields
 
 app = FastAPI(title="National Bank Loan Assistant API")
@@ -260,6 +267,22 @@ def check_session(token: str):
     """
     payload = _get_user_from_token(token)
     discovery = discover_account(payload["user_id"], payload["customer_id"])
+
+    # Include the customer's real CIBIL score (mock_cibil_api, keyed by
+    # their PAN) so the frontend credit-score card shows the correct value
+    # from the moment they log in — not a hardcoded placeholder that only
+    # corrects itself after a credit assessment runs.
+    try:
+        if discovery.get("pan_number"):
+            cibil = mock_cibil_api(discovery["pan_number"])
+            if cibil.get("success"):
+                score = cibil["cibil_score"]
+                rating = "Excellent" if score >= 750 else "Good" if score >= 700 else "Fair" if score >= 600 else "Poor"
+                discovery["cibil_score"] = score
+                discovery["cibil_rating"] = rating
+    except Exception:
+        pass
+
     return {"valid": True, "profile": discovery}
 
 
@@ -562,6 +585,17 @@ def rename_conversation(conversation_id: str, req: UpdateConversationTitleReques
         return {"success": False, "message": str(e)}
 
 
+@app.get("/loan-decision/latest")
+def get_latest_loan_decision(token: str):
+    """
+    Most recent loan decision for the authenticated customer, across ALL
+    their conversations — survives session rotation and page reloads.
+    """
+    user_context = _get_user_from_token(token)
+    decision = get_loan_decision_by_customer(user_context["customer_id"])
+    return {"loan_decision": decision}
+
+
 # ─────────────────────────────────────────────────────────────
 # PROPERTY DOCUMENTS — Supabase Storage uploads
 # ─────────────────────────────────────────────────────────────
@@ -711,8 +745,13 @@ def book_appointment(req: AppointmentRequest):
     """
     user_context = _get_user_from_token(req.token)
     try:
+        # SECURITY: always book under the TOKEN's customer_id — never the
+        # request body's. A stale/mismatched customer_id sent by the client
+        # (e.g. state left over from a previous login on the same tab) was
+        # how one customer's appointment could end up attached to another
+        # customer's profile.
         appointment = create_appointment(
-            customer_id=req.customer_id,
+            customer_id=user_context["customer_id"],
             customer_name=user_context.get("full_name") or "Customer",
             session_id=req.session_id,
             appointment_date=req.appointment_date,
@@ -757,6 +796,25 @@ def cancel_appointment_endpoint(req: CancelAppointmentRequest):
         return {"success": True, "message": "Appointment cancelled successfully."}
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+@app.get("/appointments/latest")
+def get_latest_appointment(token: str):
+    """
+    Most recent CONFIRMED appointment for the authenticated customer,
+    regardless of which session booked it — so the context panel keeps
+    showing the appointment after a New Application / page reload rotates
+    the session_id. Cancelled appointments are never returned.
+
+    NOTE: must stay registered BEFORE /appointments/{session_id} below,
+    otherwise "latest" would be captured as a session_id.
+    """
+    user_context = _get_user_from_token(token)
+    try:
+        appt = get_latest_appointment_by_customer(user_context["customer_id"])
+        return {"appointment": appt}
+    except Exception:
+        return {"appointment": None}
 
 
 @app.get("/appointments/{session_id}")
